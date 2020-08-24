@@ -1,5 +1,5 @@
 // Simple MD5 implementation, based on
-//  https://github.com/google/omaha/blob/088edf7d6d4de5df84e93d015616fcba4f6b4b1b/omaha/base/security/md5.c
+//  https://github.com/google/omaha/blob/088edf7d6d4de5df84e93d015616fcba4f6b4b1b/omaha/base/security/md5.c (Apache)
 
 #ifndef MD5_H
 #define MD5_H

@@ -49,6 +49,9 @@ struct minigz_io_t
   minigz_io_t(std::iostream& strm) : ctx(&strm), read(stream_read), write(stream_write), seek(stream_seek) {}
   minigz_io_t(void* _ctx, read_fn_t _read, write_fn_t _write, seek_fn_t _seek)
     : ctx(_ctx), read(_read), write(_write), seek(_seek) {}
+  // should be able to drop 'explicit', at least if we do some template magic
+  template<typename T>
+  explicit minigz_io_t(T& t) : minigz_io_t((void*)&t, T::readfn, T::writefn, T::seekfn) {}
 #endif
   void* ctx;
   read_fn_t read;

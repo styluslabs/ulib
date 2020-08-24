@@ -20,8 +20,6 @@
 
 #include <stdio.h>
 #include <string.h>
-
-//#include "basics.h"
 #include "image.h"
 #include "painter.h"
 
@@ -96,6 +94,22 @@ Image Image::transformed(const Transform2D& tf) const
 Image Image::scaled(int w, int h) const
 {
   return transformed(Transform2D().scale(w/(float)width, h/(float)height));
+}
+
+Image Image::cropped(const Rect& src) const
+{
+  int outw = std::min(int(src.right), width) - int(src.left);
+  int outh = std::min(int(src.bottom), height) - int(src.top);
+  if(outw <= 0 || outh <= 0)
+    return Image(0, 0);
+  Image out(outw, outh, imageFormat);
+  const unsigned int* srcpix = constPixels() + int(src.top)*width + int(src.left);
+  unsigned int* dstpix = out.pixels();
+  for(int y = 0; y < out.height; ++y) {
+    for(int x = 0; x < out.width; ++x)
+      dstpix[y*out.width + x] = srcpix[y*width + x];
+  }
+  return out;
 }
 
 void Image::fill(unsigned int color)

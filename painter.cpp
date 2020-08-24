@@ -118,9 +118,14 @@ void Painter::endFrame()
   if(glRender)
     nvgluSetViewport(0, 0, int(deviceRect.width()), int(deviceRect.height()));
 
-  // for partial redraw, we don't want to clear ... could we use INVALID_COLOR as flag to not clear?
-  //  problem is that use may want to clear background to alpha = 0 color
-  //nvgluClear(colorToNVGColor(bgColor));
+  // don't clear when drawing to screen to support partial redraw
+  if(targetImage) {
+    if(glRender)
+      nvgluClear(colorToNVGColor(bgColor));
+    else
+      targetImage->fill(bgColor.argb());
+  }
+
   nvgEndFrame(vg);
 
   if(nvgFB) {
@@ -310,10 +315,9 @@ void Painter::drawImage(const Rect& dest, const Image& image, Rect src)
     image.painterHandle = nvgCreateImageRGBA(vg, image.width, image.height, imageFlags, image.constBytes());
   if(!src.isValid())
     src = Rect::ltwh(0, 0, image.width, image.height);
-  real ex = image.width * dest.width()/src.width();
-  real ey = image.height * dest.height()/src.height();
-  real ox = dest.left - src.left;
-  real oy = dest.top - src.top;
+  real sx = dest.width()/src.width(), sy = dest.height()/src.height();
+  real ex = image.width*sx, ey = image.height*sy;
+  real ox = dest.left - src.left*sx, oy = dest.top - src.top*sy;
   NVGpaint imgpaint = nvgImagePattern(vg, ox, oy, ex, ey, 0, image.painterHandle, 1.0f);
   nvgBeginPath(vg);
   nvgRect(vg, dest.left, dest.top, dest.width(), dest.height());

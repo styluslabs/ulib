@@ -15,9 +15,6 @@ public:
   mutable int painterHandle;
 
   Image(int w, int h, ImageFormat imgfmt = UNKNOWN);
-#ifndef NDEBUG
-  Image() : Image(0, 0, NULL, UNKNOWN) {}
-#endif
   Image(Image&& other);
   Image& operator=(Image&& obj);
   ~Image();
@@ -44,6 +41,7 @@ public:
   void fill(unsigned int color);
   Image scaled(int w, int h) const;  // return a scaled version of the image
   Image transformed(const Transform2D& tf) const;
+  Image cropped(const Rect& src) const;
   bool isNull() const { return !data; }
   bool operator==(const Image& other) const;
   bool operator!=(const Image& other) const { return !operator==(other); }

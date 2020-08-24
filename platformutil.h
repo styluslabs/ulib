@@ -57,6 +57,7 @@
 //typedef float Dim;
 #elif PLATFORM_WIN
 extern bool winLogToConsole;
+bool attachParentConsole();
 void winOutputDebugString(const char* str);
 #define PLATFORM_LOG(...) winOutputDebugString(fstring(__VA_ARGS__).c_str())
 #elif PLATFORM_IOS && !IS_DEBUG
@@ -109,6 +110,16 @@ void platform_assert(bool cond, const char* msg, const char* fnname, const char*
 
 #if PLATFORM_WIN
 bool winLogToConsole = false;
+
+bool attachParentConsole()
+{
+  if(AttachConsole(ATTACH_PARENT_PROCESS)) {
+    freopen("CONOUT$", "w", stdout);
+    freopen("CONOUT$", "w", stderr);
+    return true;
+  }
+  return false;
+}
 
 void winOutputDebugString(const char* str)
 {

@@ -23,23 +23,22 @@ std::vector<std::string> lsDrives();
 
 // sadly, there is no cross-platform way to use the C file I/O fns w/ a memory stream, so we add our own
 //  abstraction (Unix has fmemopen, but not avail on Windows)
-// should we consider separate read and write positions like std::iostream?  Mainly for temporary buffers,
-//  e.g., for compression, - only for separate FIFOStream class?
+// FIFOStream class with separate read and write positions?
 struct IOStream
 {
   IOStream() {}
   IOStream(const IOStream&) = delete;
   virtual ~IOStream() {}
   virtual bool is_open() const { return true; }
-  virtual size_t read(void* dest, size_t len) = 0;
-  virtual size_t write(const void* src, size_t len) = 0;
-  virtual long tell() const = 0;
-  virtual bool seek(long offset, int origin = SEEK_SET) = 0;
+  virtual size_t read(void* dest, size_t len) = 0;  // returns number of bytes read (from stream to dest)
+  virtual size_t write(const void* src, size_t len) = 0;  // returns number of bytes written (from src to stream)
+  virtual long tell() const = 0;  // get stream position
+  virtual bool seek(long offset, int origin = SEEK_SET) = 0;  // set stream position
   virtual bool flush() { return true; }
-  virtual bool truncate(size_t len) = 0;
+  virtual bool truncate(size_t len) = 0;  // returns true on success
   virtual const char* name() const { return ""; }
   virtual size_t size() const = 0;
-  virtual size_t readp(void** pdest, size_t len) = 0;
+  virtual size_t readp(void** pdest, size_t len) = 0;  // read into buffer owned by stream
   virtual int type() const = 0;
   enum StreamType { MEMSTREAM = 1, FILESTREAM = 2, UIDOCSTREAM = 4 };
 
@@ -113,6 +112,20 @@ struct FileStream : public IOStream
   size_t size() const override;
   size_t readp(void** pdest, size_t len) override;
   int type() const override { return FILESTREAM; }
+};
+
+// would actually make more sense for MemStream to derive from ConstMemStream
+struct ConstMemStream : public MemStream
+{
+  ConstMemStream(const char* src) : ConstMemStream(src, strlen(src)) {}
+  ConstMemStream(const void* src, size_t len) { buffer = (char*)src;  buffsize = len; }
+  ~ConstMemStream() override { buffer = NULL; }  // prevent call to free() in ~MemStream()
+  ConstMemStream& operator=(ConstMemStream&& other) { MemStream::operator=(std::move(other)); return *this; }
+  ConstMemStream(ConstMemStream&& other) : MemStream(std::move(other)) {}
+
+  size_t write(const void* src, size_t len) override { return 0; }
+  bool truncate(size_t len) override { return false; }
+  //int type() const override { return CONST_MEMSTREAM;  }
 };
 
 // not quite ready to commit to C++17...
@@ -348,13 +361,9 @@ bool isDirectory(const char* path)
 {
   struct stat result;
   if(stat(path, &result) == 0)
-    return S_ISDIR(result.st_mode);
+    return result.st_mode & S_IFDIR;  // S_ISDIR(result.st_mode) -- not avail on Windows
   return false;
 }
-
-#if PLATFORM_WIN
-#error "test this"
-#endif
 
 std::string canonicalPath(const FSPath& path)
 {
@@ -365,18 +374,18 @@ std::string canonicalPath(const FSPath& path)
     dirs.emplace_back(p.fileName());  // drop trailing '/'
     p = p.parent();
   }
-  FSPath q("/");
+  // reassemble - p will be empty on Windows and root ('/') on other platforms
   while(!dirs.empty()) {
     if(dirs.back() == "..")
-      q = q.parent();
+      p = p.parent();
     else if(dirs.back() != ".")
-      q = q.child(dirs.back());
+      p = p.child(dirs.back());
     dirs.pop_back();
   }
   // if path passed by caller specifies directory, or path exists and is directory, append '/'
-  if(!q.isDir() && (path.isDir() || isDirectory(q.c_str())))
-    q.path.push_back('/');
-  return q.path;
+  if(!p.isDir() && (path.isDir() || isDirectory(p.c_str())))
+    p.path.push_back('/');
+  return p.path;
 }
 
 #if !PLATFORM_WIN
