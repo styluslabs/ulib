@@ -78,9 +78,9 @@ void gzip_footer(minigz_out_t ostrm, int len, uint32_t crc32);
 
 struct bgz_block_info_t
 {
-  uint32_t offset;
+  uint32_t offset;  // offset of block in compressed data
   uint32_t crc32_cum;
-  uint32_t len_cum;
+  uint32_t len_cum;  // cumulative length of uncompressed data
   uint32_t reserved;
 };
 
@@ -324,6 +324,7 @@ bool bgz_read_block(minigz_in_t istrm, bgz_block_info_t* block_info, minigz_out_
 //   g++ -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h
 #ifdef MINIZ_GZ_TEST
 #include <sstream>
+#include <fstream>
 
 #ifndef ASSERT
 #include <assert.h>
@@ -510,6 +511,20 @@ void test_level0_block(int test_len)
 
 int main(int argc, char* argv[])
 {
+  if(argc > 1) {
+    std::fstream f(argv[1], std::fstream::in | std::fstream::binary);
+    std::vector<bgz_block_info_t> block_info = bgz_get_index(f);
+    if(!block_info.empty()) {
+      int ii = 0;
+      for(auto& b : block_info)
+        printf("block %d: offset %d, cum_len: %d\n", ii++, b.offset, b.len_cum);
+    }
+    else
+      printf("No gzip blocks found!");
+
+    return 0;
+  }
+
   int l = 100000;
   chunkSize = l/2;     test_bgz_len(l);
   chunkSize = l - 10;  test_bgz_len(l);

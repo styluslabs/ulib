@@ -405,7 +405,7 @@ std::vector<std::string> lsDirectory(const FSPath& name)
     v.emplace_back(dp->d_name);
     if(dp->d_type & DT_DIR)
       v.back().push_back('/');
-    else if(dp->d_type == DT_UNKNOWN) {
+    else if(dp->d_type == DT_UNKNOWN || dp->d_type == DT_LNK) {
       struct stat s;
       if(stat(name.childPath(v.back()).c_str(), &s) == 0 && S_ISDIR(s.st_mode))
         v.back().push_back('/');

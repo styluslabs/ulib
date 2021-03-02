@@ -8,13 +8,16 @@
 
 class Image {
 public:
+  typedef std::vector<unsigned char> EncodeBuff;
+
   int width;
   int height;
   unsigned char* data;  //std::vector<char> data;
-  enum ImageFormat {UNKNOWN=0, PNG=1, JPEG=2} imageFormat;
+  mutable EncodeBuff jpegData;
+  enum Encoding {UNKNOWN=0, PNG=1, JPEG=2} encoding;  // prefered encoding
   mutable int painterHandle;
 
-  Image(int w, int h, ImageFormat imgfmt = UNKNOWN);
+  Image(int w, int h, Encoding imgfmt = UNKNOWN);
   Image(Image&& other);
   Image& operator=(Image&& obj);
   ~Image();
@@ -30,11 +33,7 @@ public:
   bool hasTransparency() const;
   Image& subtract(const Image& other, int scale=1, int offset=0);
 
-  const char* formatExt() const { return imageFormat == PNG ? "png" : "jpg"; }
-  const char* formatName() const { return imageFormat == PNG ? "png" : "jpeg"; }
-
-  typedef std::vector<unsigned char> EncodeBuff;
-  EncodeBuff encode(ImageFormat defaultFormat = PNG) const;
+  EncodeBuff encode(Encoding dflt) const;  // dflt=PNG
   EncodeBuff encodePNG() const;
   EncodeBuff encodeJPEG(int quality = 75) const;
 
@@ -56,15 +55,11 @@ public:
   static Image* decodePNG(const char* buff, size_t len);
   static Image* decodeJPEG(const char* buff, size_t len);
 #endif
-  static Image decodeBuffer(const unsigned char* buff, size_t len, ImageFormat formatHint = UNKNOWN);
-  static Image fromPixels(int w, int h, unsigned char* d, ImageFormat imgfmt = UNKNOWN);
-  static Image fromPixelsNoCopy(int w, int h, unsigned char* d, ImageFormat imgfmt = UNKNOWN);
-  static EncodeBuff toBase64(const Image::EncodeBuff& src);
+  static Image decodeBuffer(const unsigned char* buff, size_t len, Encoding formatHint = UNKNOWN);
+  static Image fromPixels(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
+  static Image fromPixelsNoCopy(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
 protected:
-  Image(int w, int h, unsigned char* d, ImageFormat imgfmt)
-      : width(w), height(h), data(d), imageFormat(imgfmt), painterHandle(-1) {}
+  Image(int w, int h, unsigned char* d, Encoding imgfmt, EncodeBuff jpegdata = EncodeBuff())
+      : width(w), height(h), data(d), jpegData(jpegdata), encoding(imgfmt), painterHandle(-1) {}
   Image(const Image& other);
 };
-
-char* base64_encode(const unsigned char *data, size_t input_length, char* encoded_data, size_t *output_length);
-unsigned char* base64_decode(const char *data, size_t input_length, unsigned char* decoded_data, size_t *output_length);

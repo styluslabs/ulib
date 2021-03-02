@@ -57,6 +57,7 @@ public:
   Path2D& transform(const Transform2D& tf);
 
   Path2D toReversed() const;
+  Path2D toFlat() const;
   std::vector<Path2D> getSubPaths() const;
 
   // reading

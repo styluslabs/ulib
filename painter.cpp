@@ -327,8 +327,11 @@ void Painter::drawImage(const Rect& dest, const Image& image, Rect src)
   setFillBrush(currState().fillBrush);
 }
 
-void Painter::invalidateImage(int handle)
+void Painter::invalidateImage(Image* image)
 {
+  int handle = image->painterHandle;
+  image->painterHandle = -1;
+  image->jpegData.clear();
   if(vg && handle >= 0)
     nvgDeleteImage(vg, handle);
 }

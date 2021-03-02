@@ -159,6 +159,16 @@ inline bool containsWord(const char* str, const char* word, char sep = ' ') { re
 std::string addWord(std::string s, std::string w, char sep = ' ');
 std::string removeWord(std::string s, std::string w, char sep = ' ');
 char* strNstr(const char* s, const char* substr, size_t len);
+std::string urlEncode(const char* s);
+
+// base64
+constexpr size_t base64_enclen(size_t len) { return 4 * ((len + 2) / 3); }
+char* base64_encode(const unsigned char* data, size_t len, char* dest);
+std::string base64_encode(const unsigned char* data, size_t len);
+std::vector<unsigned char> base64_decode(const char* data, size_t len);
+inline std::string base64_encode(const std::string& str) { return base64_encode((unsigned char*)str.data(), str.size()); }
+inline std::string base64_encode(const std::vector<unsigned char>& str) { return base64_encode(str.data(), str.size()); }
+inline std::vector<unsigned char> base64_decode(const std::string& str) { return base64_decode(str.data(), str.size()); }
 
 template<int N>
 static int indexOfStr(const StringRef& value, const char* const (&strs)[N])
@@ -426,6 +436,14 @@ std::vector<StringRef> splitStringRef(const StringRef& strRef, const char* sep, 
   return lst;
 }
 
+std::string urlEncode(const char* s)
+{
+  std::string res;
+  for(; *s; ++s)
+    (isalnum(*s) || *s == '-' || *s == '_' || *s == '.' || *s == '~') ? (res += *s) : (res += fstring("%%%2X", *s));
+  return res;
+}
+
 // UTF-8 decoder - cut and paste from fontstash.h
 // See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
 unsigned int decode_utf8(unsigned int* state, unsigned int* codep, unsigned char _byte)
@@ -477,6 +495,62 @@ std::string randomStr(const unsigned int len)
   return s;
 }
 
+// base64 encode/decode:
+// based on https://github.com/gaspardpetit/base64/blob/master/src/ManuelMartinez/ManuelMartinez.h
+// modified to skip whitespace (and other invalid chars) when decoding
+static const char base64enc[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+char* base64_encode(const unsigned char* data, size_t len, char* dest)
+{
+  char* out = dest;
+  unsigned int val = 0;
+  int valb = -6;
+  for (const unsigned char *cptr = data; cptr < data + len; ++cptr) {
+    val = (val << 8) + *cptr;  // we could do val & 0x00FFFFFF to shut up ubsan - would be optimized out
+    valb += 8;
+    while (valb >= 0) {
+      *out++ = base64enc[(val >> valb) & 0x3F];
+      valb -= 6;
+    }
+  }
+  if (valb > -6) *out++ = base64enc[((val << 8) >> (valb + 8)) & 0x3F];
+  while ((out - dest) % 4) *out++ = '=';
+  //ASSERT(out - dest == enclen);
+  return dest;
+}
+
+std::string base64_encode(const unsigned char* data, size_t len)
+{
+  std::string outstr(base64_enclen(len), '\0');
+  base64_encode(data, len, &outstr[0]);
+  return outstr;
+}
+
+std::vector<unsigned char> base64_decode(const char* data, size_t len)
+{
+  static std::vector<int> base64dec(256, -1);
+  if(base64dec['A'] == -1) { for (int ii = 0; ii < 64; ++ii) base64dec[base64enc[ii]] = ii; }
+
+  std::vector<unsigned char> strout(((len + 2)/4)*3, '\0');
+  unsigned char* out = &strout[0];
+  unsigned int val = 0;
+  int valb = -8;
+  for (size_t ii = 0; ii < len; ++ii) {
+    char c = data[ii];
+    int d = base64dec[c];
+    if (d == -1) continue;  // skip invalid chars
+    val = (val << 6) + (unsigned int)d;
+    valb += 6;
+    if (valb >= 0) {
+      *out++ = (val >> valb) & 0xFF;
+      valb -= 8;
+    }
+  }
+  //ASSERT(out - &strout[0] <= strout.size());
+  strout.resize(out - &strout[0]);
+  return strout;
+}
+
 // sprintf uses bignum library for printing large floats - I don't believe there is any way to get the same
 //  result more simply.  However, for numbers |x| < 2^53 (for version using fmod), realToStr seems to
 //  match sprintf except for cases involving 0.499.... vs. 0.5
@@ -525,60 +599,9 @@ int main(int argc, char* argv[])
 
 // g++ -x c++ -I../stb -DSTRINGUTIL_TEST_BASE64 -DSTRINGUTIL_IMPLEMENTATION -o base64test stringutil.h
 #ifdef STRINGUTIL_TEST_BASE64
-static const char base64enc[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-// based on https://github.com/gaspardpetit/base64/blob/master/src/ManuelMartinez/ManuelMartinez.h
-// modified to skip whitespace (and other invalid chars) when decoding
-std::string base64_encode(unsigned char* data, size_t len)
-{
-  size_t enclen = 4 * ((len + 2) / 3);
-  std::string outstr(enclen, '\0');
-  char* out = &outstr[0];
-
-  int val = 0, valb = -6;
-  for (unsigned char *cptr = data; cptr < data + len; ++cptr) {
-    val = (val << 8) + *cptr;
-    valb += 8;
-    while (valb >= 0) {
-      *out++ = base64enc[(val >> valb) & 0x3F];
-      valb -= 6;
-    }
-  }
-  if (valb > -6) *out++ = base64enc[((val << 8) >> (valb + 8)) & 0x3F];
-  while ((out - &outstr[0]) % 4) *out++ = '=';
-  //ASSERT(out - &outstr[0] == enclen);
-  return outstr;
-}
-
-std::string base64_decode(const char* data, size_t len)
-{
-  static std::vector<int> base64dec(256, -1);
-  if(base64dec['A'] == -1) { for (int ii = 0; ii < 64; ++ii) base64dec[base64enc[ii]] = ii; }
-
-  std::string strout(((len + 2)/4)*3, '\0');
-  char* out = &strout[0];
-  int val = 0, valb = -8;
-  for (size_t ii = 0; ii < len; ++ii) {
-    char c = data[ii];
-    int d = base64dec[c];
-    if (d == -1) continue;  // skip invalid chars
-    val = (val << 6) + d;
-    valb += 6;
-    if (valb >= 0) {
-      *out++ = char((val >> valb) & 0xFF);
-      valb -= 8;
-    }
-  }
-  //ASSERT(out - &strout[0] <= strout.size());
-  strout.resize(out - &strout[0]);
-  return strout;
-}
 
 #define PLATFORMUTIL_IMPLEMENTATION
 #include "platformutil.h"
-
-std::string base64_encode(const std::string& str) { return base64_encode((unsigned char*)str.data(), str.size()); }
-std::string base64_decode(const std::string& str) { return base64_decode(str.data(), str.size()); }
 
 std::string randomData(size_t len)
 {

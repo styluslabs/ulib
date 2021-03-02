@@ -360,7 +360,7 @@ public:
   NVGcolor colorToNVGColor(const Color& c, float alpha = -1);
 
   // static methods
-  static void invalidateImage(int handle);
+  static void invalidateImage(Image* image);
   static bool loadFont(const char* name, const char* filename);
   static bool loadFontMem(const char* name, unsigned char* data, int len);
   static bool addFallbackFont(const char* name, const char* fallback);

@@ -12,6 +12,10 @@
 // - CImg - can only read/write to files; could load with separate code
 // - CxImage - seems to do everything; last update 2011
 
+// JPEG images are degraded slightly every time they're encoded, with severe degredation after a few hundred
+//  cycles, so we cache JPEG data when decoding to avoid reencoding unless modified; we don't bother for PNG
+//  since reencoding is lossless and encoded data is closer in size to decoded data (so more memory usage)
+
 // I/O options: char*, size_t vs. istream, ostream vs. vector/string
 // libpng: uses callbacks passed source/dest and length, so buffer or streams work equally well
 // libjpeg: uses buffers natively ... but since we need to convert RGB888 <-> RGBA8888, we have to go through
@@ -23,22 +27,23 @@
 #include "image.h"
 #include "painter.h"
 
-Image::Image(int w, int h, ImageFormat imgfmt) : Image(w, h, NULL, imgfmt)
+Image::Image(int w, int h, Encoding imgfmt) : Image(w, h, NULL, imgfmt)
 {
   if(w > 0 && h > 0)
     data = (unsigned char*)calloc(w*h, 4);
 }
 
 Image::Image(Image&& other) : width(std::exchange(other.width, 0)), height(std::exchange(other.height, 0)),
-    data(std::exchange(other.data, nullptr)), imageFormat(other.imageFormat),
-    painterHandle(std::exchange(other.painterHandle, -1)) {}
+    data(std::exchange(other.data, nullptr)), jpegData(std::move(other.jpegData)),
+    encoding(other.encoding), painterHandle(std::exchange(other.painterHandle, -1)) {}
 
 Image& Image::operator=(Image&& other)
 {
   std::swap(width, other.width);
   std::swap(height, other.height);
   std::swap(data, other.data);
-  std::swap(imageFormat, other.imageFormat);
+  std::swap(jpegData, other.jpegData);
+  std::swap(encoding, other.encoding);
   std::swap(painterHandle, other.painterHandle);
   return *this;
 }
@@ -46,14 +51,14 @@ Image& Image::operator=(Image&& other)
 // we've switched from vector to plain pointer for data since that's what stb_image's load fns return
 // we can't copy painterHandle ... TODO: could use something like clone_ptr here instead
 Image::Image(const Image& other) : width(other.width), height(other.height), data(NULL),
-    imageFormat(other.imageFormat), painterHandle(-1)
+   jpegData(other.jpegData), encoding(other.encoding), painterHandle(-1)
 {
   int n = width*height*4;
   data = (unsigned char*)malloc(n);
   memcpy(data, other.data, n);
 }
 
-Image Image::fromPixels(int w, int h, unsigned char* d, ImageFormat imgfmt)
+Image Image::fromPixels(int w, int h, unsigned char* d, Encoding imgfmt)
 {
   size_t n = w*h*4;
   unsigned char* ourpx = (unsigned char*)malloc(n);
@@ -61,14 +66,14 @@ Image Image::fromPixels(int w, int h, unsigned char* d, ImageFormat imgfmt)
   return Image(w, h, ourpx, imgfmt);
 }
 
-Image Image::fromPixelsNoCopy(int w, int h, unsigned char* d, ImageFormat imgfmt)
+Image Image::fromPixelsNoCopy(int w, int h, unsigned char* d, Encoding imgfmt)
 {
   return Image(w, h, d, imgfmt);
 }
 
 Image::~Image()
 {
-  Painter::invalidateImage(painterHandle);
+  Painter::invalidateImage(this);
   if(data)
     free(data);
 }
@@ -80,7 +85,7 @@ Image Image::transformed(const Transform2D& tf) const
   Rect b = tf.mapRect(Rect::wh(width, height));
   int wout = std::ceil(b.width());
   int hout = std::ceil(b.height());
-  Image out(wout, hout, imageFormat);
+  Image out(wout, hout, encoding);
   Painter painter(&out);
   painter.setBackgroundColor(Color::TRANSPARENT_COLOR);
   painter.beginFrame();
@@ -102,7 +107,7 @@ Image Image::cropped(const Rect& src) const
   int outh = std::min(int(src.bottom), height) - int(src.top);
   if(outw <= 0 || outh <= 0)
     return Image(0, 0);
-  Image out(outw, outh, imageFormat);
+  Image out(outw, outh, encoding);
   const unsigned int* srcpix = constPixels() + int(src.top)*width + int(src.left);
   unsigned int* dstpix = out.pixels();
   for(int y = 0; y < out.height; ++y) {
@@ -114,8 +119,7 @@ Image Image::cropped(const Rect& src) const
 
 void Image::fill(unsigned int color)
 {
-  Painter::invalidateImage(painterHandle);
-  painterHandle = -1;
+  Painter::invalidateImage(this);
   unsigned int* pixels = (unsigned int*)data;
   for(int ii = 0; ii < width*height; ++ii)
     pixels[ii] = color;
@@ -155,7 +159,6 @@ bool Image::hasTransparency() const
 
 // decoding
 
-#ifdef USE_STB_IMAGE
 // JPEG and PNG dominate code, so excluding other types gains little
 //#define STBI_ONLY_JPEG
 //#define STBI_ONLY_PNG
@@ -164,9 +167,8 @@ bool Image::hasTransparency() const
 //#define STBI_NO_STDIO
 //#define STB_IMAGE_IMPLEMENTATION -- we expect this to be done somewhere else
 #include "stb_image.h"
-#endif
 
-Image Image::decodeBuffer(const unsigned char* buff, size_t len, ImageFormat formatHint)
+Image Image::decodeBuffer(const unsigned char* buff, size_t len, Encoding formatHint)
 {
   if(!buff || len < 16)
     return Image(0, 0);
@@ -179,7 +181,7 @@ Image Image::decodeBuffer(const unsigned char* buff, size_t len, ImageFormat for
 #ifdef USE_STB_IMAGE
   int w = 0, h = 0;
   unsigned char* data = stbi_load_from_memory(buff, len, &w, &h, NULL, 4);  // request 4 channels (RGBA)
-  return Image(w, h, data, formatHint);
+  return Image(w, h, data, formatHint, formatHint == JPEG ? EncodeBuff(buff, buff+len) : EncodeBuff());
 #else
   if(formatHint == PNG)
     return decodePNG(buff, len);
@@ -190,16 +192,11 @@ Image Image::decodeBuffer(const unsigned char* buff, size_t len, ImageFormat for
 
 // encoding
 
-Image::EncodeBuff Image::encode(ImageFormat defaultFormat) const
+Image::EncodeBuff Image::encode(Encoding fmt) const
 {
-  ImageFormat format = imageFormat == UNKNOWN ? defaultFormat : imageFormat;
-  if(format == JPEG && !hasTransparency())
-    return encodeJPEG();
-  else
-    return encodePNG();
+  return fmt == JPEG ? encodeJPEG() : encodePNG();
 }
 
-#ifdef USE_STB_IMAGE
 #ifndef NO_MINIZ
 #include "miniz/miniz.h"
 
@@ -221,6 +218,7 @@ static unsigned char* mz_stbiw_zlib_compress(unsigned char *data, int data_len, 
 
 #define STBIW_ZLIB_COMPRESS  mz_stbiw_zlib_compress
 #endif // NO_MINIZ
+
 #define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -245,269 +243,16 @@ Image::EncodeBuff Image::encodePNG() const
 
 Image::EncodeBuff Image::encodeJPEG(int quality) const
 {
-  EncodeBuff v;
-  v.reserve(dataLen()/4);
-  // returns 0 on failure ...
-  if(!stbi_write_jpg_to_func(&stbi_write_vec, &v, width, height, 4, data, quality))
-    v.clear();
-  return v;
-}
-
-Image::EncodeBuff Image::toBase64(const Image::EncodeBuff& src)
-{
-  EncodeBuff v;
-  size_t base64len;
-  char* base64 = base64_encode(NULL, src.size(), NULL, &base64len);
-  v.resize(++base64len);  // base64len does not include trailing '\0'
-  base64_encode((const unsigned char*)src.data(), src.size(), (char*)v.data(), &base64len);
-  return v;
-}
-
-#else
-// use libjpeg(-turbo) and libpng
-#include <jpeglib.h>
-#include <png.h>
-
-struct mem_block {
-  mem_block(char* d, size_t s) : data(d), size(s), index(0) {}
-  char* data;
-  size_t size;
-  int index;
-};
-
-static void readPNGCallback(png_structp pngptr, png_bytep buffer, png_size_t length)
-{
-  mem_block* mb = (mem_block*)png_get_io_ptr(pngptr);
-  memcpy(buffer, mb->data + mb->index, length);
-  mb->index += length;
-}
-
-static void writePNGCallback(png_structp pngptr, png_bytep buffer, png_size_t length)
-{
-  mem_block* mb = (mem_block*)png_get_io_ptr(pngptr);
-  memcpy(mb->data + mb->index, buffer, length);
-  mb->index += length;
-}
-
-Image* Image::decodePNG(const char* buff, size_t len)
-{
-  mem_block block((char*)buff, len);
-  png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-  if(!png_ptr) return NULL;
-  png_infop info_ptr = png_create_info_struct(png_ptr);
-  if(!info_ptr) return NULL;
-  if(setjmp(png_jmpbuf(png_ptr)))
-    return NULL;
-  png_set_read_fn(png_ptr, &block, readPNGCallback);
-  png_read_info(png_ptr, info_ptr);
-  int width = png_get_image_width(png_ptr, info_ptr);
-  int height = png_get_image_height(png_ptr, info_ptr);
-  if(png_get_color_type(png_ptr, info_ptr) == PNG_COLOR_TYPE_PALETTE)
-    png_set_palette_to_rgb(png_ptr);
-  if(png_get_color_type(png_ptr, info_ptr) == PNG_COLOR_TYPE_GRAY || png_get_color_type(png_ptr, info_ptr) == PNG_COLOR_TYPE_GRAY_ALPHA)
-    png_set_gray_to_rgb(png_ptr);
-  if(!(png_get_color_type(png_ptr, info_ptr) & PNG_COLOR_MASK_ALPHA))
-    png_set_add_alpha(png_ptr, 0xff, PNG_FILLER_AFTER);
-  if(png_get_bit_depth(png_ptr, info_ptr) < 8)
-    png_set_packing(png_ptr);
-  if(png_get_bit_depth(png_ptr, info_ptr) == 16)
-    png_set_strip_16(png_ptr);
-  // now we should get 32 bit RGBA
-  png_read_update_info(png_ptr, info_ptr);
-
-  Image* imgout = new Image(width, height, PNG);
-  char* outbuff = imgout->data.data();
-  //char* outbuff = new char[width*height*4];
-
-  png_bytep* row_pointers = new png_bytep[height];
-  for(int yp = 0; yp < height; yp++)
-    row_pointers[yp] = (png_byte*)(outbuff + 4*width*yp);
-  png_read_image(png_ptr, row_pointers);
-  png_read_end(png_ptr, info_ptr);
-  delete[] row_pointers;
-  png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
-  return imgout; //new Image(width, height, outbuff, PNG);
-}
-
-// options: accept dest pointer and max len; accept vector<>, return vector<>
-
-// ideally: if we have a simple buffer, we can write to it without an unnecessary copy - this means we must be able to work with simple buffer, not just vector
-// options: 1. wrap buffer with an ostream, 2. accept iterator instead of stream, use ostream_iterator
-
-bool Image::encodePNG(char** buffout, size_t* lenout) const
-{
-  size_t maxsize = 4*width*height + 4096;
-  char* compressed = (char*)malloc(maxsize);
-  mem_block block(compressed, maxsize);
-  png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-  const char* bytes = data.data();
-  if(!png_ptr) return false;
-  png_infop info_ptr = png_create_info_struct(png_ptr);
-  if(!info_ptr) return false;
-  if(setjmp(png_jmpbuf(png_ptr)))
-    return false;
-  png_set_write_fn(png_ptr, &block, writePNGCallback, 0);
-  png_set_IHDR(png_ptr, info_ptr, width, height, 8,
-     PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-  png_write_info(png_ptr, info_ptr);
-  png_bytep* row_pointers = new png_bytep[height];
-  for(int yp = 0; yp < height; yp++)
-    row_pointers[yp] = (png_byte*)(bytes + 4*width*yp);
-  png_write_image(png_ptr, row_pointers);
-  delete[] row_pointers;
-  png_write_end(png_ptr, NULL);
-  png_destroy_write_struct(&png_ptr, &info_ptr);
-  *buffout = compressed;
-  *lenout = block.index;
-  return true;
-}
-
-Image* Image::decodeJPEG(const char* buff, size_t len)
-{
-  struct jpeg_decompress_struct jpeg;
-  struct jpeg_error_mgr err;
-
-  jpeg.err = jpeg_std_error(&err);
-  jpeg_create_decompress(&jpeg);
-  jpeg_mem_src(&jpeg, (uint8_t*)buff, len);
-  jpeg_read_header(&jpeg, 1);
-  jpeg_start_decompress(&jpeg);
-  int width = jpeg.output_width;
-  int height = jpeg.output_height;
-  if(jpeg.output_components != 3) return NULL;
-
-  Image* imgout = new Image(width, height, JPEG);
-  uint8_t* pData = (uint8_t*)imgout->data.data();
-  //uint8_t* pData = new uint8_t[width*height*4];
-
-  uint8_t* pRow = new uint8_t[width*3];
-  //if(!pRow) { jpeg_abort_decompress(&jpeg); jpeg_destroy_decompress(&jpeg); }
-  uint32_t* pPixel = (uint32_t*)pData;
-  for(int y = 0; y < height; ++y) {
-    jpeg_read_scanlines(&jpeg, &pRow, 1);
-    for(int x = 0; x < width; ++x, ++pPixel)
-      *pPixel = 0xFF << 24 | pRow[x*3 + 2] << 16 | pRow[x*3 + 1] << 8 | pRow[x*3];
+  if(jpegData.empty()) {
+    jpegData.reserve(dataLen()/4);
+    // returns 0 on failure ...
+    if(!stbi_write_jpg_to_func(&stbi_write_vec, &jpegData, width, height, 4, data, quality))
+      jpegData.clear();
   }
-  jpeg_finish_decompress(&jpeg);
-  jpeg_destroy_decompress(&jpeg);
-  delete[] pRow;
-  return imgout; //new Image(width, height, (char*)pData, JPEG);
+  return jpegData;  // makes a copy unavoidably
 }
 
-bool Image::encodeJPEG(char** buffout, size_t* lenout, int quality) const
-{
-  jpeg_compress_struct cinfo;
-  jpeg_error_mgr jerr;
-  uint8_t* mem = NULL;
-  unsigned long memSize = 0;
-  const char* bytes = data.data();
-  cinfo.err = jpeg_std_error(&jerr);
-  jpeg_create_compress(&cinfo);
-  cinfo.image_width = width;
-  cinfo.image_height = height;
-  cinfo.input_components = 3;
-  cinfo.in_color_space = JCS_RGB;
-  jpeg_set_defaults(&cinfo);
-  jpeg_mem_dest(&cinfo, &mem, &memSize);
-  jpeg_set_quality(&cinfo, quality, true);
-  jpeg_start_compress(&cinfo, true);
-  JSAMPROW rowptr = new uint8_t[width*3];
-  while(cinfo.next_scanline < cinfo.image_height) {
-    const char* src = &bytes[cinfo.next_scanline*width*4];
-    char* dest = (char*)rowptr;
-    for(int x = 0; x < width; x++, dest += 3, src += 4)    {
-      dest[0] = src[0];
-      dest[1] = src[1];
-      dest[2] = src[2];
-    }
-    jpeg_write_scanlines(&cinfo, &rowptr, 1);
-  }
-  jpeg_finish_compress(&cinfo);
-  *buffout = (char*)mem;
-  *lenout = memSize;
-  jpeg_destroy_compress(&cinfo);
-  delete rowptr;
-  return true;
-}
-#endif  // else not USE_STB_IMAGE
-
-// base64 encode/decode - TODO: replace this w/ impl in stringutil.h
-// - mostly from http://stackoverflow.com/questions/342409/how-do-i-base64-encode-decode-in-c
-static const char base64enc[] = "ABCDEFGH" "IJKLMNOP" "QRSTUVWX" "YZabcdef" "ghijklmn" "opqrstuv" "wxyz0123" "456789+/";
-static char _base64dec[256];
-static char* base64dec = NULL;
-static const int mod_table[] = {0, 2, 1};
-
-char* base64_encode(const unsigned char *data, size_t input_length, char* encoded_data, size_t *output_length)
-{
-  size_t enclen = 4 * ((input_length + 2) / 3);
-  if(encoded_data && *output_length < enclen + 1)  // caller passed a buffer, but it's too small
-    return NULL;
-  *output_length = enclen;
-  if(!data) return NULL;  // no data - caller may just want output_length
-  if(!encoded_data)
-    encoded_data = (char*)malloc(enclen + 1);
-  if(!encoded_data) return NULL;  // allocation failure
-
-  for(unsigned int i = 0, j = 0; i < input_length;) {
-    uint32_t octet_a = i < input_length ? data[i++] : 0;
-    uint32_t octet_b = i < input_length ? data[i++] : 0;
-    uint32_t octet_c = i < input_length ? data[i++] : 0;
-
-    uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
-
-    encoded_data[j++] = base64enc[(triple >> 3 * 6) & 0x3F];
-    encoded_data[j++] = base64enc[(triple >> 2 * 6) & 0x3F];
-    encoded_data[j++] = base64enc[(triple >> 1 * 6) & 0x3F];
-    encoded_data[j++] = base64enc[(triple >> 0 * 6) & 0x3F];
-  }
-
-  for(int i = 0; i < mod_table[input_length % 3]; i++)
-    encoded_data[enclen - 1 - i] = '=';
-
-  encoded_data[enclen] = '\0';  // zero-terminate so it can be passed as string
-  return encoded_data;
-}
-
-unsigned char* base64_decode(const char *data, size_t input_length, unsigned char* decoded_data, size_t *output_length)
-{
-  if(!base64dec) {
-    // init decoding table on first run
-    base64dec = &(_base64dec[0]);
-    for(int ii = 0; ii < 64; ii++)
-      base64dec[(unsigned char) base64enc[ii]] = ii;
-  }
-
-  if(input_length % 4 != 0) return NULL;
-  size_t declen = input_length / 4 * 3;
-  if(data[input_length - 1] == '=') declen--;
-  if(data[input_length - 2] == '=') declen--;
-
-  if(decoded_data && *output_length < declen)  // caller passed a buffer, but it's too small
-    return NULL;
-  *output_length = declen;
-  if(!data) return NULL;  // no data - caller may just want output_length
-  if(!decoded_data)
-    decoded_data = (unsigned char*)malloc(declen);
-  if(!decoded_data) return NULL;  // allocation failure
-
-  for(unsigned int i = 0, j = 0; i < input_length;) {
-    uint32_t sextet_a = data[i] == '=' ? 0 & i++ : base64dec[int(data[i++])];
-    uint32_t sextet_b = data[i] == '=' ? 0 & i++ : base64dec[int(data[i++])];
-    uint32_t sextet_c = data[i] == '=' ? 0 & i++ : base64dec[int(data[i++])];
-    uint32_t sextet_d = data[i] == '=' ? 0 & i++ : base64dec[int(data[i++])];
-
-    uint32_t triple = (sextet_a << 3 * 6)
-        + (sextet_b << 2 * 6)
-        + (sextet_c << 1 * 6)
-        + (sextet_d << 0 * 6);
-
-    if(j < declen) decoded_data[j++] = (triple >> 2 * 8) & 0xFF;
-    if(j < declen) decoded_data[j++] = (triple >> 1 * 8) & 0xFF;
-    if(j < declen) decoded_data[j++] = (triple >> 0 * 8) & 0xFF;
-  }
-  return decoded_data;
-}
+// libjpeg, libpng, and base64 code removed 19 Feb 2021
 
 // test
 #ifdef IMAGE_TEST

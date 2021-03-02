@@ -202,6 +202,73 @@ Path2D Path2D::toReversed() const
   return rev;
 }
 
+// from nvg__tesselateBezier
+static void flattenBezier(Path2D* out, Point p1, Point p2, Point p3, Point p4, int level = 0)
+{
+  static constexpr real tessTol = 0.25;
+
+  real x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y, x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y;
+  real dx = x4 - x1;
+  real dy = y4 - y1;
+  real d2 = std::abs(((x2 - x4) * dy - (y2 - y4) * dx));
+  real d3 = std::abs(((x3 - x4) * dy - (y3 - y4) * dx));
+
+  if ((d2 + d3)*(d2 + d3) < tessTol * (dx*dx + dy*dy) || level >= 9)
+    out->lineTo(x4, y4); //, type);
+  else {
+    real x12 = (x1+x2)*0.5;
+    real y12 = (y1+y2)*0.5;
+    real x23 = (x2+x3)*0.5;
+    real y23 = (y2+y3)*0.5;
+    real x34 = (x3+x4)*0.5;
+    real y34 = (y3+y4)*0.5;
+    real x123 = (x12+x23)*0.5;
+    real y123 = (y12+y23)*0.5;
+    real x234 = (x23+x34)*0.5;
+    real y234 = (y23+y34)*0.5;
+    real x1234 = (x123+x234)*0.5;
+    real y1234 = (y123+y234)*0.5;
+
+    flattenBezier(out, Point(x1,y1), Point(x12,y12), Point(x123,y123), Point(x1234,y1234), level+1);
+    flattenBezier(out, Point(x1234,y1234), Point(x234,y234), Point(x34,y34), Point(x4,y4), level+1);
+  }
+}
+
+Path2D Path2D::toFlat() const
+{
+  if(isSimple())
+    return *this;
+
+  Path2D flat;
+  for(size_t ii = 0; ii < commands.size(); ++ii) {
+    switch(commands[ii]) {
+    case LineTo:
+      flat.lineTo(points[ii]);
+      break;
+    case MoveTo:
+      flat.moveTo(points[ii]);
+      break;
+    case QuadTo:
+    {
+      Point p0 = points[ii-1], p1 = points[ii], p2 = points[ii+1];
+      flattenBezier(&flat, p0, Point(p0.x + 2.0/3.0*(p1.x - p0.x), p0.y + 2.0/3.0*(p1.y - p0.y)),
+          Point(p2.x + 2.0/3.0*(p1.x - p2.x), p2.y + 2.0/3.0*(p1.y - p2.y)), p2);
+      ++ii;
+      break;
+    }
+    case CubicTo:
+      flattenBezier(&flat, points[ii-1], points[ii], points[ii+1], points[ii+2]);
+      ii += 2;
+      break;
+    case ArcTo:
+      //ASSERT(0, "ArcTo not supported by flatten");
+      ii += 2;
+      break;
+    }
+  }
+  return flat;
+}
+
 std::vector<Path2D> Path2D::getSubPaths() const
 {
   if(!empty() && isSimple())
