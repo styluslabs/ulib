@@ -123,6 +123,7 @@ public:
     return -1;
   }
 
+  StringRef& advance(int inc) { if(inc > 0) { str += inc; len -= inc; } return *this; }
   StringRef& operator+=(int inc) { str += inc; len -= inc; return *this; }
   StringRef& operator++() { str += 1; len -= 1; return *this; }
   const char& at(size_t idx) const { return str[idx]; }

@@ -208,6 +208,8 @@ bool readFile(Container* buff, const char* filename)
   return bytesread == size;
 }
 
+std::string readFile(const char* filename);
+
 #endif
 
 #ifdef FILEUTIL_IMPLEMENTATION
@@ -388,6 +390,13 @@ std::string canonicalPath(const FSPath& path)
   return p.path;
 }
 
+std::string readFile(const char* filename)
+{
+  std::string s;
+  readFile(&s, filename);
+  return s;
+}
+
 #if !PLATFORM_WIN
 #include <dirent.h>
 #include <unistd.h>
@@ -423,7 +432,9 @@ bool createDir(const std::string& dir)
 // main motivation for this is to allow actually moving file to be disabled for testing
 bool moveFile(FSPath src, FSPath dest)
 {
-  return rename(src.c_str(), dest.c_str()) == 0;
+  // rename across filesystems fails on linux w/ errno == EXDEV
+  return rename(src.c_str(), dest.c_str()) == 0 ||
+      (errno == EXDEV && copyFile(src, dest) && removeFile(src.c_str()));
 }
 
 bool removeFile(const std::string& name)

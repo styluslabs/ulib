@@ -196,8 +196,8 @@ Transform2D Painter::getTransform() const
   return Transform2D(m[0], m[1], m[2], m[3], m[4], m[5]);
 }
 
-// PainterState.clipBounds may not be tight as nanovg's actual scissor (if transform has any rotation) and is
-//  always in global coordinate system, whereas rect passed to (set)ClipRect is in local coordinates; clip
+// PainterState.clipBounds may not be as tight as nanovg's actual scissor (if transform has any rotation) and
+//  is always in global coordinate system, whereas rect passed to (set)ClipRect is in local coordinates; clip
 //  can only be saved and restored with full save()/restore()
 void Painter::setClipRect(const Rect& r)
 {
