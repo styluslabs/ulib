@@ -73,14 +73,25 @@ Image Image::fromPixelsNoCopy(int w, int h, unsigned char* d, Encoding imgfmt)
 
 Image::~Image()
 {
-  Painter::invalidateImage(this);
+  invalidate();
   if(data)
     free(data);
+}
+
+void Image::invalidate()
+{
+  jpegData.clear();
+  Painter::invalidateImage(painterHandle);
+  painterHandle = -1;
 }
 
 // use Painter for image transformations
 Image Image::transformed(const Transform2D& tf) const
 {
+  // w/ SW renderer, cached texture may have different color ordering, so force creation of new texture
+  int handle = painterHandle;
+  if(!Painter::glRender)
+    painterHandle = -1;
   // apply transform to bounding rect to determine size of output image
   Rect b = tf.mapRect(Rect::wh(width, height));
   int wout = std::ceil(b.width());
@@ -91,8 +102,12 @@ Image Image::transformed(const Transform2D& tf) const
   painter.beginFrame();
   painter.transform(Transform2D().translate(-b.left, -b.top) * tf);
   // all scaling done by transform, so pass dest = src so drawImage doesn't scale
-  painter.drawImage(Rect::wh(width, height), *this);
+  painter.drawImage(Rect::wh(width, height), *this, Rect(), Painter::ImageNoCopy);
   painter.endFrame();
+  if(!Painter::glRender) {
+    Painter::invalidateImage(painterHandle);
+    painterHandle = handle;  // restore normal painter handle
+  }
   return out;
 }
 
@@ -119,10 +134,10 @@ Image Image::cropped(const Rect& src) const
 
 void Image::fill(unsigned int color)
 {
-  Painter::invalidateImage(this);
-  unsigned int* pixels = (unsigned int*)data;
+  invalidate();
+  unsigned int* px = pixels();
   for(int ii = 0; ii < width*height; ++ii)
-    pixels[ii] = color;
+    px[ii] = color;
 }
 
 // only used for comparing test images, so we don't care about performance

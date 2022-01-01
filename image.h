@@ -22,6 +22,7 @@ public:
   Image& operator=(Image&& obj);
   ~Image();
   Image copy() const { return Image(*this); }
+  void invalidate();
 
   unsigned char* bytes() { return data; }
   const unsigned char* constBytes() const { return data; }

@@ -14,6 +14,7 @@
 #define PLATFORM_OSX 0
 #define PLATFORM_IOS 0
 #define PLATFORM_ANDROID 0
+#define PLATFORM_EMSCRIPTEN 0
 
 // NOTE: PLATFORM_NAME and PLATFORM_TYPE are expected to be lowercase
 #ifdef __ANDROID__
@@ -39,9 +40,13 @@
     #undef PLATFORM_OSX
     #define PLATFORM_OSX 1
   #endif
+#elif defined(__EMSCRIPTEN__)
+#define PLATFORM_NAME "emscripten"
+#undef PLATFORM_EMSCRIPTEN
+#define PLATFORM_EMSCRIPTEN 1
 #endif
 
-#if PLATFORM_ANDROID || PLATFORM_IOS
+#if PLATFORM_ANDROID || PLATFORM_IOS || PLATFORM_EMSCRIPTEN
 #define PLATFORM_TYPE "mobile"
 #define PLATFORM_DESKTOP 0
 #define PLATFORM_MOBILE 1

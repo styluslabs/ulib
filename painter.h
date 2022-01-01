@@ -224,6 +224,7 @@ public:
   enum CapStyle {InheritCap = -1, FlatCap = NVG_BUTT, RoundCap = NVG_ROUND, SquareCap = NVG_SQUARE};
   enum JoinStyle {InheritJoin = -1, MiterJoin = NVG_MITER, RoundJoin = NVG_ROUND, BevelJoin = NVG_BEVEL};
   enum VectorEffect { NoVectorEffect = 0, NonScalingStroke = 1 };
+  enum ImageFlags { ImagePremult = NVG_IMAGE_PREMULTIPLIED, ImageNoCopy = NVG_IMAGE_NOCOPY };
 
   //enum FontWeight { WeightLight, WeightNormal, WeightDemiBold, WeightBold, WeightBlack };
   enum FontStyle { StyleNormal, StyleItalic, StyleOblique };
@@ -253,6 +254,7 @@ public:
     // other
     Rect clipBounds = Rect::ltrb(REAL_MIN, REAL_MIN, REAL_MAX, REAL_MAX);
     float globalAlpha = 1.0;
+    color_t colorXorMask = 0;
     CompOp compOp = CompOp_SrcOver;
     bool antiAlias = true;
     bool sRGBAdjAlpha = false;
@@ -296,7 +298,7 @@ public:
   void beginPath();
   void endPath();
   void drawPath(const Path2D& path);
-  void drawImage(const Rect& dest, const Image& image, Rect src = Rect());
+  void drawImage(const Rect& dest, const Image& image, Rect src = Rect(), int flags = 0);
   real drawText(real x, real y, const char* start, const char* end = NULL);
   void setTextAlign(TextAlign align);
 
@@ -346,6 +348,7 @@ public:
   void setCapitalization(FontCapitalization c) { currState().fontCaps = c; }
   FontCapitalization capitalization() const { return currState().fontCaps; }
   void setsRGBAdjAlpha(bool adj) { currState().sRGBAdjAlpha = adj; }
+  void setColorXorMask(color_t mask) { currState().colorXorMask = mask; }
 
   // background color
   void setBackgroundColor(const Color& c) { bgColor = c; }
@@ -357,10 +360,10 @@ public:
   real textLineHeight();
 
   // non-static because it needs sRGB
-  NVGcolor colorToNVGColor(const Color& c, float alpha = -1);
+  NVGcolor colorToNVGColor(Color c, float alpha = -1);
 
   // static methods
-  static void invalidateImage(Image* image);
+  static void invalidateImage(int handle);
   static bool loadFont(const char* name, const char* filename);
   static bool loadFontMem(const char* name, unsigned char* data, int len);
   static bool addFallbackFont(const char* name, const char* fallback);

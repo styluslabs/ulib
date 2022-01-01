@@ -308,11 +308,13 @@ void Painter::fillRect(Rect rect, Color c)
   setFillBrush(currState().fillBrush); // restore brush
 }
 
-void Painter::drawImage(const Rect& dest, const Image& image, Rect src)
+void Painter::drawImage(const Rect& dest, const Image& image, Rect src, int flags)
 {
-  int imageFlags = sRGB ? NVG_IMAGE_SRGB : 0;
+  flags |= sRGB ? NVG_IMAGE_SRGB : 0;
+  // help when scaling down images w/ small features? ... just seemed to make things more blurry
+  //flags |= NVG_IMAGE_GENERATE_MIPMAPS;
   if(image.painterHandle < 0)
-    image.painterHandle = nvgCreateImageRGBA(vg, image.width, image.height, imageFlags, image.constBytes());
+    image.painterHandle = nvgCreateImageRGBA(vg, image.width, image.height, flags, image.constBytes());
   if(!src.isValid())
     src = Rect::ltwh(0, 0, image.width, image.height);
   real sx = dest.width()/src.width(), sy = dest.height()/src.height();
@@ -327,11 +329,8 @@ void Painter::drawImage(const Rect& dest, const Image& image, Rect src)
   setFillBrush(currState().fillBrush);
 }
 
-void Painter::invalidateImage(Image* image)
+void Painter::invalidateImage(int handle)
 {
-  int handle = image->painterHandle;
-  image->painterHandle = -1;
-  image->jpegData.clear();
   if(vg && handle >= 0)
     nvgDeleteImage(vg, handle);
 }
@@ -339,6 +338,12 @@ void Painter::invalidateImage(Image* image)
 // returns new x position
 real Painter::drawText(real x, real y, const char* start, const char* end)
 {
+  if(!currState().strokeBrush.isNone()) {
+    //PLATFORM_LOG("Stroking text!\n");
+    real nextx = nvgTextAsPaths(vg, x, y, start, end);
+    endPath();
+    return nextx;
+  }
   return nvgText(vg, x, y, start, end);
 }
 
@@ -504,11 +509,12 @@ void Painter::setFontSize(real px) { currState().fontPixelSize = px;  nvgFontSiz
 //  and outputs converted back to sRGB (by writing to sRGB framebuffer and enabling GL_FRAMEBUFFER_SRGB)
 
 // nanovg now handles sRGB conversion based on NVG_SRGB flag passed to nvgCreate
-NVGcolor Painter::colorToNVGColor(const Color& color, float alpha)
+NVGcolor Painter::colorToNVGColor(Color color, float alpha)
 {
   float a = alpha >= 0 ? alpha : color.alpha() / 255.0f;
   if(a < 1.0f && a > 0.0f && sRGB && currState().sRGBAdjAlpha)
     a = 1.0f - std::pow(1.0f - a, 2.2f);
+  color.color ^= currState().colorXorMask;
   return nvgRGBA(color.red(), color.green(), color.blue(), (unsigned char)(a*255.0f + 0.5f));
 }
 
