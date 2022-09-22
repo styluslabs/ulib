@@ -338,18 +338,27 @@ void Painter::invalidateImage(int handle)
 // returns new x position
 real Painter::drawText(real x, real y, const char* start, const char* end)
 {
-  if(!currState().strokeBrush.isNone()) {
-    //PLATFORM_LOG("Stroking text!\n");
-    real nextx = nvgTextAsPaths(vg, x, y, start, end);
-    endPath();
-    return nextx;
+  bool faux = currState().fauxItalic || currState().fauxBold;
+  if(currState().strokeBrush.isNone() && !faux)
+    return nvgText(vg, x, y, start, end);
+  // have to render as paths
+  if(faux) nvgSave(vg);
+  if(currState().fauxBold && currState().strokeBrush.isNone())
+    setStroke(currState().fillBrush, currState().fontPixelSize*0.1);
+  if(currState().fauxItalic) {
+    nvgTranslate(vg, currState().fontPixelSize*0.35, 0);
+    nvgSkewX(vg, -13*M_PI/180);
   }
-  return nvgText(vg, x, y, start, end);
+  real nextx = nvgTextAsPaths(vg, x, y, start, end);
+  endPath();
+  if(faux) nvgRestore(vg);
+  return nextx;
 }
 
 // Note that text measurement depends on current painter state and thus cannot be static methods
 // return X advance; if passed, boundsout is united with the text bounding rect (if boundsout is an
 //  invalid rect, this will just set it equal to the text rect)
+// TODO: adjust text bounds for faux italic/bold!
 real Painter::textBounds(real x, real y, const char* s, const char* end, Rect* boundsout)
 {
   float bounds[4];
@@ -491,15 +500,52 @@ void Painter::setStroke(const Brush& b, real w, CapStyle cap, JoinStyle join)
   setStrokeJoin(join);
 }
 
+void Painter::resolveFont()
+{
+  bool italic = currState().fontStyle != StyleNormal;
+  bool bold  = currState().fontWeight > 550;
+  int fontid = -1;
+  if(bold && italic) {
+    fontid = currState().boldItalicFontId;
+    bold = italic = fontid < 0;  // still need bold and italic?
+  }
+  if(fontid < 0 && bold) {
+    fontid = currState().boldFontId;
+    bold = fontid < 0;  // still need (faux) bold?
+  }
+  if(fontid < 0 && italic) {
+    fontid = currState().italicFontId;
+    italic = fontid < 0;  // still need (faux) italic?
+  }
+  if(fontid < 0)
+    fontid = currState().fontId;
+  nvgFontFaceId(vg, fontid);
+  currState().fauxBold = bold;
+  currState().fauxItalic = italic;
+}
+
 // nanovg won't render or calc bounds if unknown font is set; don't set and return false if font not found
 bool Painter::setFontFamily(const char* family)
 {
-  //currState().fontFamily = family;
   int fontid = nvgFindFont(vg, family);
-  if(fontid != -1)
-    nvgFontFaceId(vg, fontid);
-  return fontid != -1;
+  if(fontid == -1)
+    return false;
+  if(fontid == currState().fontId)
+    return true;
+  std::string fam(family);
+  currState().fontId = fontid;
+  currState().boldFontId = nvgFindFont(vg, (fam + "-bold").c_str());
+  currState().italicFontId = nvgFindFont(vg, (fam + "-italic").c_str());
+  currState().boldItalicFontId = nvgFindFont(vg, (fam + "-bold-italic").c_str());
+  resolveFont();
+  return true;
 }
+
+void Painter::setFontWeight(int weight)
+  { if(currState().fontWeight != weight) { currState().fontWeight = weight; resolveFont(); } }
+
+void Painter::setFontStyle(FontStyle style)
+  { if(currState().fontStyle != style) { currState().fontStyle = style; resolveFont(); } }
 
 void Painter::setFontSize(real px) { currState().fontPixelSize = px;  nvgFontSize(vg, px);}  //pt * 2.08
 

@@ -320,6 +320,45 @@ bool bgz_read_block(minigz_in_t istrm, bgz_block_info_t* block_info, minigz_out_
 
 #endif // MINIZ_GZ_IMPLEMENTATION
 
+// g++ -DMINIZ_GZ_UTIL -DMINIZ_GZ_IMPLEMENTATION -isystem .. -isystem ../stb -o bgunzip -x c++ miniz_gzip.h
+#ifdef MINIZ_GZ_UTIL
+
+#include <fstream>
+#define STRINGUTIL_IMPLEMENTATION
+#include "stringutil.h"
+
+#include "miniz/miniz.c"
+#include "miniz/miniz_tdef.c"
+#include "miniz/miniz_tinfl.c"
+
+int main(int argc, char* argv[])
+{
+  if(argc < 2) {
+    printf("Usage: bgunzip <file to extract>\n");
+    return -1;
+  }
+  StringRef baseref(argv[1]);
+  if(baseref.endsWith(".gz")) baseref.chop(3);
+  else if(baseref.back() == 'z') baseref.chop(1);
+  std::string basestr = baseref.toString();
+
+  std::fstream fin(argv[1], std::fstream::in | std::fstream::binary);
+  std::vector<bgz_block_info_t> block_info = bgz_get_index(fin);
+  if(block_info.empty()) {
+    printf("No gzip blocks found, try gunzip!\n");
+    return -2;
+  }
+  for(size_t ii = 0; ii < block_info.size() - 1; ++ii) {
+    bgz_block_info_t* b = &block_info[ii];
+    std::fstream fout(fstring("%s.%03d", basestr.c_str(), ii).c_str(), std::fstream::out | std::fstream::binary);
+    bool ok = bgz_read_block(fin, b, fout);
+    printf("block %03d: offset %d, cum_len: %d  %s\n", ii, b->offset, b->len_cum, ok ? "OK" : "ERROR");
+  }
+  return 0;
+}
+
+#endif //MINIZ_GZ_UTIL
+
 // To build test executable (replace .. with path to directory containing miniz/ as needed)
 //   g++ -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h
 #ifdef MINIZ_GZ_TEST

@@ -33,7 +33,7 @@ Container<std::string, Container_Params... > splitStr(const char* s, char delim,
   std::string item;
   while(std::getline(ss, item, delim))
     if(!skip_empty || !item.empty())
-      elems.push_back(item);
+      elems.insert(elems.end(), item);  //elems.push_back(item);  -- insert() works for all container types
   return elems;
 }
 
@@ -43,7 +43,7 @@ Container<char*, Container_Params... > splitStrInPlace(char* str, const char* se
   Container<char*, Container_Params... > res;
   int seplen = strlen(sep);
   while(1) {
-    res.push_back(str);
+    res.insert(res.end(), str);  //res.push_back(str);
     str = strstr(str, sep);
     if(!str)
       break;

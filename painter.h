@@ -247,6 +247,8 @@ public:
     VectorEffect strokeEffect = NoVectorEffect;
     // font
     //std::string fontFamily;
+    short fontId = -1, boldFontId = -1, italicFontId = -1, boldItalicFontId = -1;
+    bool fauxBold = false, fauxItalic = false;
     float fontPixelSize = 16;
     int fontWeight = 400;
     FontStyle fontStyle = StyleNormal;
@@ -339,11 +341,11 @@ public:
   // font
   void setFontSize(real px);
   real fontSize() const { return currState().fontPixelSize; }
-  void setFontWeight(int weight) { currState().fontWeight = weight; }
+  void setFontWeight(int weight);
   int fontWeight() const { return currState().fontWeight; }
   bool setFontFamily(const char* family);
   //const char* fontFamily() const { return currState().fontFamily.c_str(); }
-  void setFontStyle(FontStyle style) { currState().fontStyle = style; }
+  void setFontStyle(FontStyle style);
   FontStyle fontStyle() const { return currState().fontStyle; }
   void setCapitalization(FontCapitalization c) { currState().fontCaps = c; }
   FontCapitalization capitalization() const { return currState().fontCaps; }
@@ -367,4 +369,7 @@ public:
   static bool loadFont(const char* name, const char* filename);
   static bool loadFontMem(const char* name, unsigned char* data, int len);
   static bool addFallbackFont(const char* name, const char* fallback);
+
+private:
+  void resolveFont();
 };

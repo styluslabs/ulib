@@ -13,7 +13,7 @@ public:
   int width;
   int height;
   unsigned char* data;  //std::vector<char> data;
-  mutable EncodeBuff jpegData;
+  mutable EncodeBuff encData;
   enum Encoding {UNKNOWN=0, PNG=1, JPEG=2} encoding;  // prefered encoding
   mutable int painterHandle;
 
@@ -60,7 +60,7 @@ public:
   static Image fromPixels(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
   static Image fromPixelsNoCopy(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
 protected:
-  Image(int w, int h, unsigned char* d, Encoding imgfmt, EncodeBuff jpegdata = EncodeBuff())
-      : width(w), height(h), data(d), jpegData(jpegdata), encoding(imgfmt), painterHandle(-1) {}
+  Image(int w, int h, unsigned char* d, Encoding imgfmt, EncodeBuff encdata = EncodeBuff())
+      : width(w), height(h), data(d), encData(encdata), encoding(imgfmt), painterHandle(-1) {}
   Image(const Image& other);
 };

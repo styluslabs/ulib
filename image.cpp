@@ -34,7 +34,7 @@ Image::Image(int w, int h, Encoding imgfmt) : Image(w, h, NULL, imgfmt)
 }
 
 Image::Image(Image&& other) : width(std::exchange(other.width, 0)), height(std::exchange(other.height, 0)),
-    data(std::exchange(other.data, nullptr)), jpegData(std::move(other.jpegData)),
+    data(std::exchange(other.data, nullptr)), encData(std::move(other.encData)),
     encoding(other.encoding), painterHandle(std::exchange(other.painterHandle, -1)) {}
 
 Image& Image::operator=(Image&& other)
@@ -42,7 +42,7 @@ Image& Image::operator=(Image&& other)
   std::swap(width, other.width);
   std::swap(height, other.height);
   std::swap(data, other.data);
-  std::swap(jpegData, other.jpegData);
+  std::swap(encData, other.encData);
   std::swap(encoding, other.encoding);
   std::swap(painterHandle, other.painterHandle);
   return *this;
@@ -51,7 +51,7 @@ Image& Image::operator=(Image&& other)
 // we've switched from vector to plain pointer for data since that's what stb_image's load fns return
 // we can't copy painterHandle ... TODO: could use something like clone_ptr here instead
 Image::Image(const Image& other) : width(other.width), height(other.height), data(NULL),
-   jpegData(other.jpegData), encoding(other.encoding), painterHandle(-1)
+   encData(other.encData), encoding(other.encoding), painterHandle(-1)
 {
   int n = width*height*4;
   data = (unsigned char*)malloc(n);
@@ -80,7 +80,7 @@ Image::~Image()
 
 void Image::invalidate()
 {
-  jpegData.clear();
+  encData.clear();
   Painter::invalidateImage(painterHandle);
   painterHandle = -1;
 }
@@ -196,7 +196,7 @@ Image Image::decodeBuffer(const unsigned char* buff, size_t len, Encoding format
 #ifdef USE_STB_IMAGE
   int w = 0, h = 0;
   unsigned char* data = stbi_load_from_memory(buff, len, &w, &h, NULL, 4);  // request 4 channels (RGBA)
-  return Image(w, h, data, formatHint, formatHint == JPEG ? EncodeBuff(buff, buff+len) : EncodeBuff());
+  return Image(w, h, data, formatHint, EncodeBuff(buff, buff+len));  //formatHint == JPEG ?
 #else
   if(formatHint == PNG)
     return decodePNG(buff, len);
@@ -245,10 +245,14 @@ static void stbi_write_vec(void* context, void* data, int size)
   v->insert(v->end(), d, d + size);
 }
 
+// use of encData: can be used for PNG or JPEG, but PNG never overwrites JPEG
 Image::EncodeBuff Image::encodePNG() const
 {
   //stbi_write_png_compression_level = quality;
-  EncodeBuff v;
+  if(encData.size() && encData[0] == 0x89)
+    return encData;
+  EncodeBuff vbuff;
+  EncodeBuff& v = encData.empty() ? encData : vbuff;
   v.reserve(dataLen()/4);  // guess at compressed size
   // returns 0 on failure ...
   if(!stbi_write_png_to_func(&stbi_write_vec, &v, width, height, 4, data, width*4))
@@ -258,13 +262,15 @@ Image::EncodeBuff Image::encodePNG() const
 
 Image::EncodeBuff Image::encodeJPEG(int quality) const
 {
-  if(jpegData.empty()) {
-    jpegData.reserve(dataLen()/4);
+  if(encData.size() && encData[0] != 0xFF)  //encoding != JPEG)
+    encData.clear();
+  if(encData.empty()) {
+    encData.reserve(dataLen()/4);
     // returns 0 on failure ...
-    if(!stbi_write_jpg_to_func(&stbi_write_vec, &jpegData, width, height, 4, data, quality))
-      jpegData.clear();
+    if(!stbi_write_jpg_to_func(&stbi_write_vec, &encData, width, height, 4, data, quality))
+      encData.clear();
   }
-  return jpegData;  // makes a copy unavoidably
+  return encData;  // makes a copy unavoidably
 }
 
 // libjpeg, libpng, and base64 code removed 19 Feb 2021
