@@ -342,16 +342,18 @@ real Painter::drawText(real x, real y, const char* start, const char* end)
   if(currState().strokeBrush.isNone() && !faux)
     return nvgText(vg, x, y, start, end);
   // have to render as paths
-  if(faux) nvgSave(vg);
+  if(faux) save();  //nvgSave(vg);
   if(currState().fauxBold && currState().strokeBrush.isNone())
-    setStroke(currState().fillBrush, currState().fontPixelSize*0.1);
+    setStroke(currState().fillBrush, currState().fontPixelSize*0.05, FlatCap, MiterJoin);
   if(currState().fauxItalic) {
-    nvgTranslate(vg, currState().fontPixelSize*0.35, 0);
+    // y translation must be applied before skew
+    nvgTranslate(vg, -0.1*currState().fontPixelSize, y);
     nvgSkewX(vg, -13*M_PI/180);
+    y = 0;
   }
   real nextx = nvgTextAsPaths(vg, x, y, start, end);
   endPath();
-  if(faux) nvgRestore(vg);
+  if(faux) restore();  //nvgRestore(vg);
   return nextx;
 }
 
@@ -364,7 +366,7 @@ real Painter::textBounds(real x, real y, const char* s, const char* end, Rect* b
   float bounds[4];
   real advX = nvgTextBounds(vg, x, y, s, end, &bounds[0]);
   if(boundsout)
-    boundsout->rectUnion(Rect::ltrb(bounds[0], bounds[1], bounds[2], bounds[3]));
+    boundsout->rectUnion(getTransform().mapRect(Rect::ltrb(bounds[0], bounds[1], bounds[2], bounds[3])));
   return advX;
 }
 
@@ -504,22 +506,21 @@ void Painter::resolveFont()
 {
   bool italic = currState().fontStyle != StyleNormal;
   bool bold  = currState().fontWeight > 550;
-  int fontid = -1;
+  int res = -1;
   if(bold && italic) {
-    fontid = currState().boldItalicFontId;
-    bold = italic = fontid < 0;  // still need bold and italic?
+    res = nvgFontFaceId(vg, currState().boldItalicFontId);
+    bold = italic = res < 0;  // still need bold and italic?
   }
-  if(fontid < 0 && bold) {
-    fontid = currState().boldFontId;
-    bold = fontid < 0;  // still need (faux) bold?
+  if(res < 0 && bold) {
+    res = nvgFontFaceId(vg, currState().boldFontId);
+    bold = res < 0;  // still need (faux) bold?
   }
-  if(fontid < 0 && italic) {
-    fontid = currState().italicFontId;
-    italic = fontid < 0;  // still need (faux) italic?
+  if(res < 0 && italic) {
+    res = nvgFontFaceId(vg, currState().italicFontId);
+    italic = res < 0;  // still need (faux) italic?
   }
-  if(fontid < 0)
-    fontid = currState().fontId;
-  nvgFontFaceId(vg, fontid);
+  if(res < 0)
+    nvgFontFaceId(vg, currState().fontId);
   currState().fauxBold = bold;
   currState().fauxItalic = italic;
 }
@@ -548,6 +549,8 @@ void Painter::setFontStyle(FontStyle style)
   { if(currState().fontStyle != style) { currState().fontStyle = style; resolveFont(); } }
 
 void Painter::setFontSize(real px) { currState().fontPixelSize = px;  nvgFontSize(vg, px);}  //pt * 2.08
+
+void Painter::setLetterSpacing(real px) { currState().letterSpacing = px;  nvgTextLetterSpacing(vg, px);}
 
 // sRGB: see nanovg-2 readme for more, but in short, images and colors (i.e. #XXXXXX) are always in sRGB
 //  space, but blending should happen in linear space, i.e. shaders should work in linear space, so inputs to

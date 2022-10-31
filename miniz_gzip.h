@@ -97,7 +97,7 @@ bool bgz_read_block(minigz_in_t istrm, bgz_block_info_t* block_info, minigz_out_
 #include <memory>
 
 //static constexpr size_t STRM_MAX = std::numeric_limits<std::streamsize>::max();
-static int chunkSize = 1 << 20;
+static size_t chunkSize = 1 << 20;
 
 // Ref: https://github.com/strake/gzip/blob/master/gzip.c
 // level < 0 to inflate, level >= 0 to deflate
@@ -118,7 +118,7 @@ int miniz_go(int level, minigz_in_t istrm, minigz_out_t ostrm, uint32_t* crc_32,
   uint8_t* x = (uint8_t*)malloc(chunkSize);
   uint8_t* y = (uint8_t*)malloc(chunkSize);
 
-  int n = 0, nout = 0, nreq = chunkSize;
+  size_t n = 0, nout = 0, nreq = chunkSize;
   for(;;) {
     if(s.avail_in == 0) {
       size_t reqlim = max_read_bytes - s.total_in;
@@ -564,6 +564,7 @@ int main(int argc, char* argv[])
     return 0;
   }
 
+  printf("No file specified - running tests...");
   int l = 100000;
   chunkSize = l/2;     test_bgz_len(l);
   chunkSize = l - 10;  test_bgz_len(l);

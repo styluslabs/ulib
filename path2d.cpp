@@ -378,6 +378,25 @@ real Path2D::pathLength() const
   return length;
 }
 
+// note that offset is not normalized - to use a normalized offset, multiply by pathLength()
+Point Path2D::positionAlongPath(real offset, Point* normal_out) const
+{
+  real dx = 0, dy = 0, dr = 0, length = 0;
+  for(size_t ii = 1; ii < points.size(); ++ii) {
+    dx = points[ii].x - points[ii-1].x;
+    dy = points[ii].y - points[ii-1].y;
+    dr = sqrt(dx*dx + dy*dy);
+    if(length + dr > offset) {
+      real t = (offset - length)/dr;
+      if(normal_out)
+        *normal_out = Point(-dy, dx).normalize();
+      return t*points[ii]  + (1-t)*points[ii-1];
+    }
+    length += dr;
+  }
+  return Point(NaN, NaN);
+}
+
 // note that we assume closed paths are explicitly closed (e.g. with a lineTo to first point)
 Point PathPointIter::next()
 {

@@ -251,6 +251,7 @@ public:
     bool fauxBold = false, fauxItalic = false;
     float fontPixelSize = 16;
     int fontWeight = 400;
+    float letterSpacing = 0;
     FontStyle fontStyle = StyleNormal;
     FontCapitalization fontCaps = MixedCase;
     // other
@@ -343,6 +344,8 @@ public:
   real fontSize() const { return currState().fontPixelSize; }
   void setFontWeight(int weight);
   int fontWeight() const { return currState().fontWeight; }
+  void setLetterSpacing(real px);
+  real letterSpacing() const { return currState().letterSpacing; }
   bool setFontFamily(const char* family);
   //const char* fontFamily() const { return currState().fontFamily.c_str(); }
   void setFontStyle(FontStyle style);

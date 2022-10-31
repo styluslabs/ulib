@@ -51,6 +51,7 @@ public:
   real distToPoint(const Point& p) const;
   bool isEnclosedBy(const Path2D& lasso) const;
   real pathLength() const;
+  Point positionAlongPath(real offset, Point* normal_out) const;
 
   void translate(real x, real y);
   void scale(real sx, real sy);
