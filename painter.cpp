@@ -1,33 +1,134 @@
 #include <string.h>
+#include <mutex>
+#include <memory>
 
 #include "platformutil.h"
 #include "painter.h"
 #include "path2d.h"
 #include "image.h"
 
+#include "fontstash.h"
 #include "nanovg_sw.h"
 #ifndef NO_PAINTER_GL
+typedef uint32_t GLuint;
+#include "nanovg_vtex.h"
 #include "nanovg_gl_utils.h"
+#include "nanovg_sw_utils.h"
 #endif
 
 
-NVGcontext* Painter::vg = NULL;
-bool Painter::vgInUse = false;
-bool Painter::sRGB = false;
+Painter* Painter::cachingPainter = NULL;
+FONScontext* Painter::fontStash = NULL;
 std::string Painter::defaultFontFamily;
-#ifndef NO_PAINTER_GL
-bool Painter::glRender = true;
-#else
-bool Painter::glRender = false;
-#endif
+int Painter::maxCachedBytes = 512*1024*1024;
 
-Painter::Painter()
+// NVGcontext for bounds calculation only
+static int nullvg__renderCreate(void* uptr) { return 1; }
+
+static NVGcontext* nvgNullCreate(int flags)
 {
+  NVGparams params;
+  memset(&params, 0, sizeof(params));
+  params.renderCreate = nullvg__renderCreate;
+  params.flags = flags;
+  return nvgCreateInternal(&params);
+}
+
+static void nvgNullDelete(NVGcontext* ctx)
+{
+  nvgDeleteInternal(ctx);
+}
+
+std::unique_lock<std::mutex> getFonsLock(Painter* p)
+{
+  static std::mutex fonsMutex;
+  if(p->createFlags & Painter::PRIVATE_FONTS || p->createFlags & Painter::NO_TEXT || !(p->createFlags & Painter::MULTITHREAD))
+    return std::unique_lock<std::mutex>();
+  return std::unique_lock<std::mutex>(fonsMutex);
+}
+
+Painter::Painter(int flags, Image* image)
+{
+  int nvgFlags = NVG_AUTOW_DEFAULT;
+  nvgFlags |= (flags & NO_TEXT) ? NVG_NO_FONTSTASH : 0;
+  nvgFlags |= (flags & PRIVATE_FONTS) ? 0 : NVG_NO_FONTSTASH;
+  nvgFlags |= (flags & SRGB_AWARE) ? NVG_SRGB : 0;
+  bool sharefons = !(flags & PRIVATE_FONTS || flags & NO_TEXT);
+  if(sharefons && fontStash && fonsInternalParams(fontStash)->flags & FONS_SDF)
+    nvgFlags |= NVG_SDF_TEXT;
+
+  if((flags & PAINT_MASK) == PAINT_NULL)
+    vg = nvgNullCreate(nvgFlags);
+#ifndef NO_PAINTER_GL
+  else if((flags & PAINT_MASK) == PAINT_GL) {
+    // caching painter is assumed to have same lifetime as GL context
+    //nvgFlags |= (flags & CACHE_IMAGES) ? NVGL_DELETE_NO_GL : 0;
+    nvgFlags |= (flags & PAINT_DEBUG_GL) ? NVGL_DEBUG : 0;
+    vg = nvglCreate(nvgFlags);
+  }
+#endif
+  else { //if(flags & PAINT_MASK == PAINT_SW)
+    nvgFlags |= (flags & SW_NO_XC) ? 0 : NVGSW_PATHS_XC;
+    vg = nvgswCreate(nvgFlags);
+  }
+
+  if(sharefons)
+    nvgSetFontStash(vg, fontStash);
+
+  if(flags & SW_BLIT_GL)
+    swBlitter = nvgswuCreateBlitter();
+
+  if(flags & CACHE_IMAGES && !cachingPainter)
+    cachingPainter = this;
+
+  createFlags = flags;
+  setTarget(image);
   painterStates.reserve(32);
   painterStates.emplace_back();
-  // this is done to permit use of temporary painter for bounds calculation even when active frame
-  nvgSave(vg);
   reset();
+}
+
+Painter::Painter(NVGcontext* _vg, Image* image) : vg(_vg)
+{
+  setTarget(image);
+  painterStates.reserve(32);
+  painterStates.emplace_back();
+  reset();
+}
+
+void Painter::setTarget(Image* image)
+{
+  targetImage = image;
+  deviceRect = image ? Rect::wh(image->width, image->height) : Rect();
+#ifndef NO_PAINTER_GL
+  if(image && usesGPU())
+    nvgFB = nvgluCreateFramebuffer(vg, image->width, image->height, NVGLU_NO_NVG_IMAGE | (sRGB() ? NVG_IMAGE_SRGB : 0));
+  else if(nvgFB) {
+    nvgluDeleteFramebuffer(nvgFB);
+    nvgFB = NULL;
+  }
+#endif
+}
+
+Painter::~Painter()
+{
+  if(swBlitter) {
+    nvgswuDeleteBlitter(swBlitter);
+    delete targetImage;
+  }
+  if(!vg) {}
+  else if(!nvgInternalParams(vg)->userPtr)
+    nvgNullDelete(vg);
+  else if(usesGPU())
+    nvglDelete(vg);
+  else
+    nvgswDelete(vg);
+#ifndef NO_PAINTER_GL
+  if(nvgFB)
+    nvgluDeleteFramebuffer(nvgFB);
+#endif
+  if(this == cachingPainter)
+    cachingPainter = NULL;
 }
 
 void Painter::reset()
@@ -57,55 +158,45 @@ void Painter::reset()
   setClipRect(Rect());  // clear scissor
 }
 
-// maybe we should have an ImagePainter child class?
-Painter::Painter(Image* image) : Painter()
-{
-  targetImage = image;
-  int w = image->width, h = image->height;
-  deviceRect = Rect::wh(w,h);
-
-#ifndef NO_PAINTER_GL
-  if(glRender)
-    nvgFB = nvgluCreateFramebuffer(vg, w, h, NVGLU_NO_NVG_IMAGE | (sRGB ? NVG_IMAGE_SRGB : 0));
-#endif
-}
-
-Painter::~Painter()
-{
-  // make sure we don't leave any states behind on nanovg stack; note
-  while(painterStates.size() > 1)
-    restore();
-  nvgRestore(vg);
-
-#ifndef NO_PAINTER_GL
-  if(nvgFB)
-    nvgluDeleteFramebuffer(nvgFB);
-#endif
-}
-
 void Painter::beginFrame(real pxRatio)
 {
-  ASSERT(!vgInUse && deviceRect.isValid());
-  vgInUse = true;
+  ASSERT(deviceRect.isValid());
+  int fbWidth = deviceRect.width(), fbHeight = deviceRect.height();
+
+  // clearing textures added to support Write documents w/ large number of images (e.g. from PDF conversion)
+  if(cachedBytes > maxCachedBytes) {
+    for(int h : imgHandles)
+      nvgDeleteImage(vg, h);
+    imgHandles.clear();
+    cachedBytes = 0;
+  }
 
 #ifndef NO_PAINTER_SW
-  if(targetImage && !glRender)
+  if(swBlitter) {
+    bool sizeChanged = (fbWidth != swBlitter->width || fbHeight != swBlitter->height);
+    if(!targetImage || sizeChanged) {
+      delete targetImage;
+      targetImage = new Image(fbWidth, fbHeight);
+    }
+  }
+  // have to set at beginning of frame since each tile has separate command lists for multithreaded case
+  if(targetImage && !usesGPU())
     nvgswSetFramebuffer(vg, targetImage->bytes(), targetImage->width, targetImage->height, 0, 8, 16, 24);
 #endif
-  nvgBeginFrame(vg, deviceRect.width(), deviceRect.height(), pxRatio);
+  nvgBeginFrame(vg, fbWidth, fbHeight, pxRatio);
   // nvgBeginFrame resets nanovg state stack, so reset ours too
   ASSERT(painterStates.size() == 1);
   painterStates.resize(1);
   reset();
   if(nvgFB) {
-    translate(0, deviceRect.height());
+    translate(0, fbHeight);
     scale(1, -1);
   }
 }
 
 void Painter::endFrame()
 {
-  ASSERT(vgInUse);
+  bool glRender = usesGPU();
   // moved from Painter::beginFrame - nanovg does not make any GL calls until endFrame, so neither should we
 #ifdef NO_PAINTER_GL
   nvgEndFrame(vg);
@@ -119,7 +210,7 @@ void Painter::endFrame()
     nvgluSetViewport(0, 0, int(deviceRect.width()), int(deviceRect.height()));
 
   // don't clear when drawing to screen to support partial redraw
-  if(targetImage) {
+  if(targetImage && bgColor.isValid()) {
     if(glRender)
       nvgluClear(colorToNVGColor(bgColor));
     else
@@ -133,35 +224,80 @@ void Painter::endFrame()
     nvgluBindFBO(prevFBO);
   }
 #endif
-#ifndef NO_PAINTER_SW
-  if(targetImage && !glRender)
-    nvgswSetFramebuffer(vg, NULL, targetImage->width, targetImage->height, 0, 8, 16, 24);
+//#ifndef NO_PAINTER_SW
+//  if(targetImage && !glRender)
+//    nvgswSetFramebuffer(vg, NULL, targetImage->width, targetImage->height, 0, 8, 16, 24);
+//#endif
+}
+
+void Painter::blitImageToScreen(Rect dirty, bool blend)
+{
+  if(!swBlitter || !targetImage) return;
+  int fbWidth = targetImage->width, fbHeight = targetImage->height;
+  nvgswuSetBlend(blend);
+  nvgswuBlit(swBlitter, targetImage->bytes(), fbWidth, fbHeight,
+      int(dirty.left), int(dirty.top), int(dirty.width()), int(dirty.height()));
+}
+
+bool Painter::usesGPU() const
+{
+  return nvgInternalParams(vg)->flags & NVG_IS_GPU;
+}
+
+bool Painter::sRGB() const
+{
+  return nvgInternalParams(vg)->flags & NVG_SRGB;
+}
+
+#ifdef FONS_WPATH
+#include "fileutil.h"
+#define FONS_PATH(x) ((const char*)PLATFORM_STR(x))
+#else
+#define FONS_PATH(x) (x)
 #endif
-  vgInUse = false;
+
+bool Painter::loadFont(const char* name, const char* filename, Painter* painter)
+{
+  if(painter) return nvgCreateFont(painter->vg, name, FONS_PATH(filename)) != -1;
+  if(!fontStash) return false;
+  if(fonsAddFont(fontStash, name, FONS_PATH(filename)) == -1) return false;
+  if(defaultFontFamily.empty()) defaultFontFamily = name;
+  return true;
 }
 
 // fallback is name of already loaded font, not filename!
-bool Painter::loadFont(const char* name, const char* filename)
+bool Painter::loadFontMem(const char* name, unsigned char* data, int len, Painter* painter)
 {
-  if(nvgCreateFont(vg, name, filename) == -1)
-    return false;
-  if(defaultFontFamily.empty())
-    defaultFontFamily = name;
+  if(painter) return nvgCreateFontMem(painter->vg, name, data, len, 0) != -1;
+  if(!fontStash) return false;
+  if(fonsAddFontMem(fontStash, name, data, len, 0) == -1) return false;
+  if(defaultFontFamily.empty()) defaultFontFamily = name;
   return true;
 }
 
-bool Painter::loadFontMem(const char* name, unsigned char* data, int len)
+bool Painter::addFallbackFont(const char* name, const char* fallback, Painter* painter)
 {
-  if(nvgCreateFontMem(vg, name, data, len, 0) == -1)
-    return false;
-  if(defaultFontFamily.empty())
-    defaultFontFamily = name;
-  return true;
+  if(painter)
+    return nvgAddFallbackFont(painter->vg, name, fallback);
+  if(fontStash)
+    return fonsAddFallbackFont(fontStash,
+        fonsGetFontByName(fontStash, name), fonsGetFontByName(fontStash, fallback));
+  return false;
 }
 
-bool Painter::addFallbackFont(const char* name, const char* fallback)
+static void fonsDeleter(FONScontext* fons) { fonsDeleteInternal(fons); };
+
+void Painter::initFontStash(int flags, int pad, float pixdist)
 {
-  return nvgAddFallbackFont(vg, name, fallback);
+  static std::unique_ptr<FONScontext, decltype(&fonsDeleter)> dfltFons(NULL, fonsDeleter);
+
+  FONSparams fonsParams = {0};
+  fonsParams.sdfPadding = pad;
+  fonsParams.sdfPixelDist = pixdist;
+  fonsParams.flags = flags | FONS_ZERO_TOPLEFT;  //FONS_ZERO_TOPLEFT | FONS_DELAY_LOAD | FONS_SUMMED;
+  fonsParams.atlasBlockHeight = 0;
+  dfltFons.reset(fonsCreateInternal(&fonsParams));
+  Painter::fontStash = dfltFons.get();
 }
 
 void Painter::save()
@@ -310,17 +446,30 @@ void Painter::fillRect(Rect rect, Color c)
 
 void Painter::drawImage(const Rect& dest, const Image& image, Rect src, int flags)
 {
-  flags |= sRGB ? NVG_IMAGE_SRGB : 0;
-  // help when scaling down images w/ small features? ... just seemed to make things more blurry
-  //flags |= NVG_IMAGE_GENERATE_MIPMAPS;
-  if(image.painterHandle < 0)
-    image.painterHandle = nvgCreateImageRGBA(vg, image.width, image.height, flags, image.constBytes());
+  // we are using the fact that a nanovg instance assigns monotonically increasing image (texture) handles
+  int handle;
+  if(this == cachingPainter && !imgHandles.empty() && image.painterHandle >= imgHandles.front())
+    handle = image.painterHandle;
+  else {
+    //flags |= NVG_IMAGE_GENERATE_MIPMAPS; ... just seemed to make things more blurry
+    flags |= sRGB() ? NVG_IMAGE_SRGB : 0;
+    flags |= (this != cachingPainter) ? NVG_IMAGE_DISCARD : 0;
+    auto bytes = image.bytesOnce();
+    handle = nvgCreateImageRGBA(vg, image.width, image.height, flags, bytes);
+    if(bytes != image.data) free(bytes);
+    if(this == cachingPainter) {
+      image.painterHandle = handle;
+      imgHandles.push_back(handle);
+      cachedBytes += image.dataLen();
+    }
+  }
+
   if(!src.isValid())
     src = Rect::ltwh(0, 0, image.width, image.height);
   real sx = dest.width()/src.width(), sy = dest.height()/src.height();
   real ex = image.width*sx, ey = image.height*sy;
   real ox = dest.left - src.left*sx, oy = dest.top - src.top*sy;
-  NVGpaint imgpaint = nvgImagePattern(vg, ox, oy, ex, ey, 0, image.painterHandle, 1.0f);
+  NVGpaint imgpaint = nvgImagePattern(vg, ox, oy, ex, ey, 0, handle, 1.0f);
   nvgBeginPath(vg);
   nvgRect(vg, dest.left, dest.top, dest.width(), dest.height());
   nvgFillPaint(vg, imgpaint);
@@ -329,22 +478,54 @@ void Painter::drawImage(const Rect& dest, const Image& image, Rect src, int flag
   setFillBrush(currState().fillBrush);
 }
 
-void Painter::invalidateImage(int handle)
+void Painter::invalidateImage(int handle, int len)
 {
-  if(vg && handle >= 0)
-    nvgDeleteImage(vg, handle);
+  if(cachingPainter && !cachingPainter->imgHandles.empty() && handle >= cachingPainter->imgHandles.front()) {
+    cachingPainter->cachedBytes -= len;
+    nvgDeleteImage(cachingPainter->vg, handle);
+  }
+}
+
+void Painter::setAtlasTextThreshold(float thresh)
+{
+  atlasTextThresh = thresh;
+  nvgAtlasTextThreshold(vg, thresh);
 }
 
 // returns new x position
 real Painter::drawText(real x, real y, const char* start, const char* end)
 {
+  auto lock = getFonsLock(this);
   bool faux = currState().fauxItalic || currState().fauxBold;
   if(currState().strokeBrush.isNone() && !faux)
     return nvgText(vg, x, y, start, end);
+  float weight = (currState().fontWeight - 400)/300.0;
+#ifdef FONS_SDF
+  // support for drawing faux bold and text w/ halo using SDF
+  if(currState().fontPixelSize*getTransform().avgScale() < atlasTextThresh && !currState().fauxItalic) {
+    real adv = 0;
+    float strokeadj = 0;  // default 0 for StrokeOuter
+    if(!currState().strokeBrush.isNone()) {
+      if(currState().strokeAlign == StrokeCenter) strokeadj = currState().strokeWidth/2;
+      else if(currState().strokeAlign == StrokeInner) strokeadj = currState().strokeWidth;
+      nvgFontBlur(vg, currState().strokeWidth + weight - strokeadj);
+      // nvgText uses fill
+      nvgFillColor(vg, colorToNVGColor(currState().strokeBrush.color()));
+      adv = nvgText(vg, x, y, start, end);
+      setFillBrush(currState().fillBrush);  // restore
+    }
+    if(!currState().fillBrush.isNone()) {
+      nvgFontBlur(vg, weight - strokeadj);
+      adv = nvgText(vg, x, y, start, end);
+    }
+    nvgFontBlur(vg, 0);
+    return adv;
+  }
+#endif
   // have to render as paths
   if(faux) save();  //nvgSave(vg);
   if(currState().fauxBold && currState().strokeBrush.isNone())
-    setStroke(currState().fillBrush, currState().fontPixelSize*0.05, FlatCap, MiterJoin);
+    setStroke(currState().fillBrush, currState().fontPixelSize*0.05*weight, FlatCap, MiterJoin);
   if(currState().fauxItalic) {
     // y translation must be applied before skew
     nvgTranslate(vg, -0.1*currState().fontPixelSize, y);
@@ -363,6 +544,7 @@ real Painter::drawText(real x, real y, const char* start, const char* end)
 // TODO: adjust text bounds for faux italic/bold!
 real Painter::textBounds(real x, real y, const char* s, const char* end, Rect* boundsout)
 {
+  auto lock = getFonsLock(this);
   float bounds[4];
   real advX = nvgTextBounds(vg, x, y, s, end, &bounds[0]);
   if(boundsout)
@@ -372,6 +554,7 @@ real Painter::textBounds(real x, real y, const char* s, const char* end, Rect* b
 
 int Painter::textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<Rect>* pos_out)
 {
+  auto lock = getFonsLock(this);
   size_t len = end ? end - start : strlen(start);
   NVGglyphPosition* positions = new NVGglyphPosition[len];
   int npos = nvgTextGlyphPositions(vg, x, y, start, end, positions, len);
@@ -383,6 +566,7 @@ int Painter::textGlyphPositions(real x, real y, const char* start, const char* e
 
 real Painter::textLineHeight()
 {
+  auto lock = getFonsLock(this);
   float lineh = 0;
   nvgTextMetrics(vg, NULL, NULL, &lineh);
   return lineh;
@@ -415,54 +599,139 @@ void Painter::setOpacity(real opacity)
   float a = opacity;
   currState().globalAlpha = a;
   // this is an ugly hack, and assumes transparent color is dark
-  if(a < 1.0f && a > 0.0f && sRGB && currState().sRGBAdjAlpha)
+  if(a < 1.0f && a > 0.0f && sRGB() && currState().sRGBAdjAlpha)
     a = 1.0f - pow(1.0f - a, 2.2f);
   nvgGlobalAlpha(vg, a);
 }
 
 // fill/stroke paint, font
 
+static ColorF sRGBtoLinear(Color c)
+{
+  ColorF res;
+  res.r = nvgSRGBtoLinear(c.red());
+  res.g = nvgSRGBtoLinear(c.green());
+  res.b = nvgSRGBtoLinear(c.blue());
+  res.a = c.alphaF();
+  return res;
+}
+
+static Color linearTosRGB(ColorF c)
+{
+  static float ig = 1/2.31f;
+  return Color::fromFloat(powf(c.r, ig), powf(c.g, ig), powf(c.b, ig), c.a);
+}
+
+static ColorF colorInterpF(ColorF a, ColorF b, float u)
+{
+  ColorF res;
+  res.r = (1-u)*a.r + u*b.r;
+  res.g = (1-u)*a.g + u*b.g;
+  res.b = (1-u)*a.b + u*b.b;
+  res.a = (1-u)*a.a + u*b.a;
+  return res;
+}
+
 NVGpaint Painter::getGradientPaint(const Gradient* grad)
 {
   if(grad->stops().empty())
-    return nvgLinearGradient(vg, 0, 0, 1, 1, colorToNVGColor(Color::NONE), colorToNVGColor(Color::NONE));
+    return nvgLinearGradient(vg, 0, 0, 1, 0, {0}, {0});
 
-  NVGcolor cin = colorToNVGColor(grad->stops().front().second);
-  NVGcolor cout = colorToNVGColor(grad->stops().back().second);
+  NVGpaint paint;
+  // we could add a flag for SW renderer to support sRGB interp directly, but match GL renderer for now
+  bool xinterp = (sRGB() ? Gradient::LinearColorInterp : Gradient::sRGBColorInterp) != grad->colorInterp;
+  bool alphaonly = grad->stops().front().second.opaque() == grad->stops().back().second.opaque();
+  bool multi = grad->stops().size() > 2 || (grad->stops().size() > 1 && xinterp && !alphaonly);
+  // nanovg gradients basically assume param scale roughly matches actual size of object, in particular
+  //  clamping feather to be >= 1.0 and using 1e5 offset for linear grad
+  real scale = std::max(1000.0, std::max(deviceRect.width(), deviceRect.height()));
+  GradientStop stop1 = multi ? GradientStop(0, Color::BLACK) : grad->stops().front();
+  GradientStop stop2 = multi ? GradientStop(1, Color::WHITE) : grad->stops().back();
+  NVGcolor cin = colorToNVGColor(stop1.second);
+  NVGcolor cout = colorToNVGColor(stop2.second);
   if(grad->type == Gradient::Linear) {
     const Gradient::LinearGradCoords& g = grad->coords.linear;
-    return nvgLinearGradient(vg, g.x1, g.y1, g.x2, g.y2, cin, cout);
+    // we need s1 != s2 in order to specify direction of gradient
+    real s1 = stop1.first;
+    real s2 = stop2.first == s1 ? s1 + 0.1/scale : stop2.first;
+    real x1 = scale * ( g.x1 + s1*(g.x2 - g.x1) );
+    real y1 = scale * ( g.y1 + s1*(g.y2 - g.y1) );
+    real x2 = scale * ( g.x1 + s2*(g.x2 - g.x1) );
+    real y2 = scale * ( g.y1 + s2*(g.y2 - g.y1) );
+    paint = nvgLinearGradient(vg, x1, y1, x2, y2, cin, cout);
   }
-  if(grad->type == Gradient::Radial) {
+  else if(grad->type == Gradient::Radial) {
     const Gradient::RadialGradCoords& g = grad->coords.radial;
-    // nanosvg doesn't fully support SVG-style radial gradient
-    real inner_radius = Point(g.fx - g.cx, g.fy - g.cy).dist();
-    return nvgRadialGradient(vg, g.cx, g.cy, inner_radius, g.radius, cin, cout);
+    // nanovg doesn't support offset radial gradients (fx != cx or fy != cy)
+    real rin = scale * stop1.first*g.radius;  //Point(g.fx - g.cx, g.fy - g.cy).dist();
+    real rout = scale * stop2.first*g.radius;
+    paint = nvgRadialGradient(vg, scale * g.cx, scale * g.cy, rin, rout, cin, cout);
   }
-  if(grad->type == Gradient::Box) {
+  else if(grad->type == Gradient::Box) {
     const Gradient::BoxGradCoords& g = grad->coords.box;
-    return nvgBoxGradient(vg, g.x, g.y, g.w, g.h, g.r, g.feather, cin, cout);
+    paint = nvgBoxGradient(vg, g.x, g.y, g.w, g.h, g.r, g.feather, cin, cout);
   }
-  // have to return something
-  return nvgLinearGradient(vg, 0, 0, 1, 1, cin, cout);
+
+  if(multi) {
+    int handle = this == cachingPainter ? grad->painterHandle.handle : -1;
+    if(handle <= 0) {  //imgHandleBase
+      auto& stops = grad->stops();
+      // in general, we can't premultiply in sRGB space, so we don't use premultiplied texture
+      int flags = (this != cachingPainter ? NVG_IMAGE_DISCARD : 0) | (sRGB() ? NVG_IMAGE_SRGB : 0);
+      if(grad->colorInterp == Gradient::LinearColorInterp) {
+        size_t w = 256;
+        std::vector<color_t> img(w);
+        real f = 0, fstep = 1.0/(w - 1);
+        ColorF c0 = sRGBtoLinear(stops[0].second);
+        ColorF c1 = sRGBtoLinear(stops[1].second);
+        for (size_t pidx = 0, sidx = 0; pidx < w; ++pidx) {
+          while (f > stops[sidx+1].first && sidx < stops.size() - 2) {
+            ++sidx;
+            c0 = sRGBtoLinear(stops[sidx].second);
+            c1 = sRGBtoLinear(stops[sidx+1].second);
+          }
+          ColorF c = colorInterpF(c0, c1, (f - stops[sidx].first)/(stops[sidx+1].first - stops[sidx].first));
+          img[pidx] = linearTosRGB(c).color;  // this is why we can't use nvgMultiGradient for this case
+          f += fstep;
+        }
+        handle = nvgCreateImageRGBA(vg, int(w), 1, flags, (unsigned char*)img.data());
+      }
+      else {
+        std::vector<float> fstops;
+        std::vector<NVGcolor> colors;
+        fstops.reserve(stops.size());
+        colors.reserve(stops.size());
+        for(auto& stop : stops) {
+          fstops.push_back(float(stop.first));
+          colors.push_back(colorToNVGColor(stop.second));
+        }
+        handle = nvgMultiGradient(vg, flags, fstops.data(), colors.data(), fstops.size());
+      }
+      if(this == cachingPainter)
+        grad->painterHandle.handle = handle;
+    }
+    paint.image = handle;
+  }
+
+  float xform[6];
+  if(grad->type != Gradient::Box) {
+    nvgTransformScale(xform, 1/scale, 1/scale);
+    nvgTransformMultiply(paint.xform, xform);
+  }
+  if(grad->coordinateMode() == Gradient::ObjectBoundingMode && grad->objectBBox.isValid()) {
+    nvgTransformScale(xform, grad->objectBBox.width(), grad->objectBBox.height());
+    nvgTransformMultiply(paint.xform, xform);
+    nvgTransformTranslate(xform, grad->objectBBox.left, grad->objectBBox.top);
+    nvgTransformMultiply(paint.xform, xform);
+  }
+  return paint;
 }
 
 void Painter::setFillBrush(const Brush& b)
 {
   currState().fillBrush = b;
-  if(b.gradient()) {
-    const Gradient* g = b.gradient();
-    if(g->coordinateMode() == Gradient::ObjectBoundingMode && g->objectBBox.isValid()) {
-      // nanovg applies current transform when setting paint, so include object bbox transform
-      Transform2D oldtf = getTransform();
-      transform(Transform2D().scale(g->objectBBox.width(), g->objectBBox.height())
-          .translate(g->objectBBox.left, g->objectBBox.top));
-      nvgFillPaint(vg, getGradientPaint(g));
-      setTransform(oldtf);
-    }
-    else
-      nvgFillPaint(vg, getGradientPaint(g));
-  }
+  if(b.gradient())
+    nvgFillPaint(vg, getGradientPaint(b.gradient()));
   else
     nvgFillColor(vg, colorToNVGColor(b.color()));
 }
@@ -470,19 +739,8 @@ void Painter::setFillBrush(const Brush& b)
 void Painter::setStrokeBrush(const Brush& b)
 {
   currState().strokeBrush = b;
-  if(b.gradient()) {
-    const Gradient* g = b.gradient();
-    if(g->coordinateMode() == Gradient::ObjectBoundingMode && g->objectBBox.isValid()) {
-      // nanovg applies current transform when setting paint, so include object bbox transform
-      Transform2D oldtf = getTransform();
-      transform(Transform2D().scale(g->objectBBox.width(), g->objectBBox.height())
-          .translate(g->objectBBox.left, g->objectBBox.top));
-      nvgStrokePaint(vg, getGradientPaint(g));
-      setTransform(oldtf);
-    }
-    else
-      nvgStrokePaint(vg, getGradientPaint(g));
-  }
+  if(b.gradient())
+    nvgStrokePaint(vg, getGradientPaint(b.gradient()));
   else
     nvgStrokeColor(vg, colorToNVGColor(b.color()));
 }
@@ -504,6 +762,7 @@ void Painter::setStroke(const Brush& b, real w, CapStyle cap, JoinStyle join)
 
 void Painter::resolveFont()
 {
+  auto lock = getFonsLock(this);
   bool italic = currState().fontStyle != StyleNormal;
   bool bold  = currState().fontWeight > 550;
   int res = -1;
@@ -561,25 +820,43 @@ void Painter::setLetterSpacing(real px) { currState().letterSpacing = px;  nvgTe
 NVGcolor Painter::colorToNVGColor(Color color, float alpha)
 {
   float a = alpha >= 0 ? alpha : color.alpha() / 255.0f;
-  if(a < 1.0f && a > 0.0f && sRGB && currState().sRGBAdjAlpha)
+  if(a < 1.0f && a > 0.0f && sRGB() && currState().sRGBAdjAlpha)
     a = 1.0f - std::pow(1.0f - a, 2.2f);
   color.color ^= currState().colorXorMask;
   return nvgRGBA(color.red(), color.green(), color.blue(), (unsigned char)(a*255.0f + 0.5f));
 }
 
-// Color
+// Gradient
 
+UniqueHandle::UniqueHandle(const UniqueHandle& other) : handle(-1)
+{
+#if IS_DEBUG
+  if(other.handle >= 0)
+    PLATFORM_LOG("UniqueHandle copied!");
+#endif
+}
+
+void Gradient::invalidate() const
+{
+  //Painter::invalidateImage(painterHandle.handle, 0);  // gradients not counted toward cachedBytes
+  if(painterHandle.handle > 0 && Painter::cachingPainter) {
+    nvgDeleteImage(Painter::cachingPainter->vg, painterHandle.handle);
+    painterHandle.handle = -1;
+  }
+}
+
+// Color
 // HSV ref: Foley, van Dam, et. al. (1st ed. in C) 13.3
-// probably should use floats for HSV calculations, even if we return ints
-Color Color::fromHSV(int h, int s, int v, int a)
+
+ColorF ColorF::fromHSV(float h, float s, float v, float a)
 {
   h = h >= 360 ? 0 : h;
-  int h6floor = h/60;
-  int h6frac = h%60;
-  int p = v * (255 - s);  // v * (1 - s);
-  int q = v * (255 - (s*h6frac)/60);  // v * (1 - s*h6frac);
-  int t = v * (255 - (s*(60 - h6frac))/60);  // v * (1 - (s * (1 - h6frac)));
-  int r = 0, g = 0, b = 0;
+  int h6floor = std::floor(h/60);
+  float h6frac = h/60 - h6floor;
+  float p = v * (1 - s);
+  float q = v * (1 - s*h6frac);
+  float t = v * (1 - (s * (1 - h6frac)));
+  float r = 0, g = 0, b = 0;
   switch(h6floor) {
     case 0: r = v; g = t; b = p; break;
     case 1: r = q; g = v; b = p; break;
@@ -588,36 +865,37 @@ Color Color::fromHSV(int h, int s, int v, int a)
     case 4: r = t; g = p; b = v; break;
     case 5: r = v; g = p; b = q; break;
   }
-  return Color(r/255, g/255, b/255, a);
+  return {r, g, b, a};
 }
 
-int Color::hueHSV() const
+float ColorF::hueHSV() const
 {
-  int max = valueHSV();
-  int min = std::min(std::min(red(), green()), blue());
-  int delta = max - min;
-  int hue = 0;
+  //int r = red(), g = green(), b = blue();
+  float max = valueHSV();
+  float min = std::min(std::min(r, g), b);
+  float delta = max - min;
+  float hue = 0;
   if(max == 0 || delta == 0)  // i.e., if sat == 0
     hue = 0;
-  else if(max == red())
-    hue = (green() - blue())/delta;
-  else if(max == green())
-    hue = 120 + (60*(blue() - red()))/delta;
-  else if(max == blue())
-    hue = 240 + (60*(red() - green()))/delta;
+  else if(max == r)
+    hue = (60*(g - b))/delta;
+  else if(max == g)
+    hue = 120 + (60*(b - r))/delta;
+  else if(max == b)
+    hue = 240 + (60*(r - g))/delta;
   if(hue < 0)
     hue += 360;
   return hue;
 }
 
-int Color::satHSV() const
+float ColorF::satHSV() const
 {
-  int max = valueHSV();
-  int min = std::min(std::min(red(), green()), blue());
-  return max == 0 ? 0 : (255*(max - min))/max;
+  float max = valueHSV();
+  float min = std::min(std::min(r, g), b);
+  return max > 0 ? (max - min)/max : 0;
 }
 
-int Color::valueHSV() const
+float ColorF::valueHSV() const
 {
-  return std::max(std::max(red(), green()), blue());
+  return std::max(std::max(r, g), b);
 }

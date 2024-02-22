@@ -320,12 +320,11 @@ bool bgz_read_block(minigz_in_t istrm, bgz_block_info_t* block_info, minigz_out_
 
 #endif // MINIZ_GZ_IMPLEMENTATION
 
-// g++ -DMINIZ_GZ_UTIL -DMINIZ_GZ_IMPLEMENTATION -isystem .. -isystem ../stb -o bgunzip -x c++ miniz_gzip.h
+// g++ -DMINIZ_GZ_UTIL -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o bgunzip -x c++ miniz_gzip.h
+//-isystem ../stb
 #ifdef MINIZ_GZ_UTIL
 
 #include <fstream>
-#define STRINGUTIL_IMPLEMENTATION
-#include "stringutil.h"
 
 #include "miniz/miniz.c"
 #include "miniz/miniz_tdef.c"
@@ -337,22 +336,36 @@ int main(int argc, char* argv[])
     printf("Usage: bgunzip <file to extract>\n");
     return -1;
   }
-  StringRef baseref(argv[1]);
-  if(baseref.endsWith(".gz")) baseref.chop(3);
-  else if(baseref.back() == 'z') baseref.chop(1);
-  std::string basestr = baseref.toString();
+  std::string outname(argv[1]);
+  if(outname.substr(outname.size()-3) == ".gz") outname.resize(outname.size()-3);
+  else if(outname.back() == 'z') outname.pop_back();
+  else outname.append(".infl");
 
   std::fstream fin(argv[1], std::fstream::in | std::fstream::binary);
   std::vector<bgz_block_info_t> block_info = bgz_get_index(fin);
   if(block_info.empty()) {
-    printf("No gzip blocks found, try gunzip!\n");
-    return -2;
+    std::fstream fout(outname.c_str(), std::fstream::out | std::fstream::binary);
+    fin.seekg(0);
+    if(gunzip(fin, fout) > 0) {
+      printf("No gzip blocks found, extracted as normal gzip file to %s", outname.c_str());
+    }
+    else {
+      // use, e.g., `tail -c +<offset> infile > outfile` to extract a possible orphan block, then use bgunzip to inflate
+      uint32_t crc_32 = 0;
+      std::fstream fout2((outname + ".XXX").c_str(), std::fstream::out | std::fstream::binary);
+      fin.seekg(0);
+      int nread = miniz_go(-1, fin, fout2, &crc_32, 0x7FFFFFFF);
+      printf("No gzip blocks found, gunzip failed; inflated %d bytes to %s.XXX\n", nread, outname.c_str());
+    }
   }
-  for(size_t ii = 0; ii < block_info.size() - 1; ++ii) {
-    bgz_block_info_t* b = &block_info[ii];
-    std::fstream fout(fstring("%s.%03d", basestr.c_str(), ii).c_str(), std::fstream::out | std::fstream::binary);
-    bool ok = bgz_read_block(fin, b, fout);
-    printf("block %03d: offset %d, cum_len: %d  %s\n", ii, b->offset, b->len_cum, ok ? "OK" : "ERROR");
+  else {
+    for(size_t ii = 0; ii < block_info.size() - 1; ++ii) {
+      bgz_block_info_t* b = &block_info[ii];
+      std::string namehack = outname + std::to_string(0.001 * ii + 1e-6).substr(1, 4);
+      std::fstream fout(namehack.c_str(), std::fstream::out | std::fstream::binary);
+      bool ok = bgz_read_block(fin, b, fout);
+      printf("block %03d: offset %d, cum_len: %d  %s\n", ii, b->offset, b->len_cum, ok ? "OK" : "ERROR");
+    }
   }
   return 0;
 }

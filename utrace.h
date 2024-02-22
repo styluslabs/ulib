@@ -9,18 +9,20 @@ struct Tracer
 {
   static std::string buff;
   static uint64_t countsPerUs;
-  static void record(uint64_t t0, const char* msg)
+  static bool enabled;
+  static uint64_t record(uint64_t t0, const char* msg)
   {
+    if(!enabled) return 0;
     char temp[64];
-    int n = intToStr(temp, int(t() - t0));
-    buff.append(temp, n);
-    buff.append(" us: ");
-    buff.append(msg);
-    buff.append("\n");
+    uint64_t t1 = t();
+    int n = intToStr(temp, int(t1 - t0));
+    buff.append(temp, n).append(" us: ").append(msg).append("\n");
+    return t1;
   }
 
   static void flush()
   {
+    if(!enabled) return;
     uint64_t t0 = t();
     PLATFORM_LOG(buff.c_str());
     buff.clear();
@@ -28,14 +30,24 @@ struct Tracer
   }
 
   // see github.com/Celtoys/Remotery for a simple impl w/o SDL
-  static void init() { countsPerUs = SDL_GetPerformanceFrequency()/1000000; }
-  static uint64_t t() { return SDL_GetPerformanceCounter()/countsPerUs; }  // in microseconds
+#ifdef UTRACE_SDL
+  static void init() { enabled = true; countsPerUs = SDL_GetPerformanceFrequency()/1000000; }
+  static uint64_t t() { return enabled ? SDL_GetPerformanceCounter()/countsPerUs : 0; }  // in microseconds
+#else
+  static void init() { enabled = true; }
+  static uint64_t t() {
+    if(!enabled) return 0;
+    auto now = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+  }
+#endif
 };
 
 #define TRACE_INIT() Tracer::init()
 #define TRACE_T() Tracer::t()
 #define TRACE_BEGIN(var) uint64_t var = TRACE_T()
-#define TRACE_END(t0, msg) Tracer::record(t0, msg)
+#define TRACE_STEP(t0, msg) Tracer::record(t0, msg)
+#define TRACE_END(t0, msg) t0 = Tracer::record(t0, msg)
 #define TRACE_FLUSH() Tracer::flush()
 
 #define TRACE(stmt) do { TRACE_BEGIN(t0); stmt; TRACE_END(t0, #stmt); } while(0)
@@ -55,6 +67,7 @@ struct ScopedTrace
 
 std::string Tracer::buff;
 uint64_t Tracer::countsPerUs = 1000;
+bool Tracer::enabled = false;
 
 #endif  // UTRACE_IMPLEMENTATION
 
@@ -62,6 +75,7 @@ uint64_t Tracer::countsPerUs = 1000;
 
 #define TRACE_INIT() do {} while(0)
 #define TRACE_BEGIN(var) do {} while(0)
+#define TRACE_STEP(t0, msg) do {} while(0)
 #define TRACE_END(t0, msg) do {} while(0)
 #define TRACE_FLUSH() do {} while(0)
 #define TRACE_SCOPE(...) do {} while(0)

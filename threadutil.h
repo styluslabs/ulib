@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <climits>
 
 class Semaphore
 {
@@ -9,25 +10,25 @@ private:
   std::mutex mtx;
   std::condition_variable cond;
   unsigned long cnt = 0;
+  const unsigned long max;
 
 public:
-  void post()
-  {
+  Semaphore(unsigned long _max = ULONG_MAX) : max(_max) {}
+
+  void post() {
     std::lock_guard<decltype(mtx)> lock(mtx);
-    ++cnt;
+    cnt = std::min(max, cnt+1);
     cond.notify_one();
   }
 
-  void wait()
-  {
+  void wait() {
     std::unique_lock<decltype(mtx)> lock(mtx);
     cond.wait(lock, [this](){ return cnt > 0; });
     --cnt;
   }
 
   // returns true if semaphore was signaled, false if timeout occurred
-  bool waitForMsec(unsigned long ms)
-  {
+  bool waitForMsec(unsigned long ms) {
     std::unique_lock<decltype(mtx)> lock(mtx);
     bool res = cond.wait_for(lock, std::chrono::milliseconds(ms), [this](){ return cnt > 0; });
     if(res)
@@ -116,3 +117,61 @@ inline ThreadPool::~ThreadPool()
   for(std::thread &worker: workers)
     worker.join();
 }
+
+// Thread safe deque - optionally use a std::list so references remain valid even when not locked (also,
+//  note that std::deque may have large memory overhead)
+
+template < class T, template<class, class...> class Container = std::deque >
+class ThreadSafeQueue
+{
+public:
+  std::mutex mutex;
+  std::condition_variable cond_var;
+  Container<T> queue;
+
+  void push_back(T&& item) {
+    { std::lock_guard<std::mutex> lock(mutex); queue.push_back(std::move(item)); }
+    cond_var.notify_one();
+  }
+
+  template <class ...Params>
+  void emplace_back(Params&&... params) {
+    { std::lock_guard<std::mutex> lock(mutex); queue.emplace_back(std::forward<Params>(params)...); }
+    cond_var.notify_one();
+  }
+
+  void push_front(T&& item) {
+    { std::lock_guard<std::mutex> lock(mutex); queue.push_front(std::move(item)); }
+    cond_var.notify_one();
+  }
+
+  // these should only be used for std::list container or by the unique thread that modifies container
+  size_t size() { std::lock_guard<std::mutex> lock(mutex); return queue.size(); }
+  bool empty() { std::lock_guard<std::mutex> lock(mutex); return queue.empty(); }
+  T& front() { std::lock_guard<std::mutex> lock(mutex); return queue.front(); }
+  T& back() { std::lock_guard<std::mutex> lock(mutex); return queue.back(); }
+
+  void pop_front() { std::lock_guard<std::mutex> lock(mutex); queue.pop_front(); }
+  void pop_back() { std::lock_guard<std::mutex> lock(mutex); queue.pop_back(); }
+
+  bool pop_front(T& dest) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if(queue.empty()) return false;
+    dest = std::move(queue.front());
+    queue.pop_front();
+    return true;
+  }
+
+  bool pop_back(T& dest) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if(queue.empty()) return false;
+    dest = std::move(queue.back());
+    queue.pop_back();
+    return true;
+  }
+
+  void wait() {
+    std::unique_lock<std::mutex> lock(mutex);
+    cond_var.wait(lock, [&]{ return !queue.empty(); });
+  }
+};

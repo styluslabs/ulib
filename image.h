@@ -14,7 +14,7 @@ public:
   int height;
   unsigned char* data;  //std::vector<char> data;
   mutable EncodeBuff encData;
-  enum Encoding {UNKNOWN=0, PNG=1, JPEG=2} encoding;  // prefered encoding
+  enum Encoding {UNKNOWN=0, PNG=1, JPEG=2} encoding;  // preferred encoding
   mutable int painterHandle;
 
   Image(int w, int h, Encoding imgfmt = UNKNOWN);
@@ -24,10 +24,11 @@ public:
   Image copy() const { return Image(*this); }
   void invalidate();
 
-  unsigned char* bytes() { return data; }
-  const unsigned char* constBytes() const { return data; }
-  unsigned int* pixels() { return (unsigned int*)data; }
-  const unsigned int* constPixels() const { return (const unsigned int*)data; }
+  unsigned char* bytes() { if(!data && !encData.empty()) data = bytesOnce(); return data; }
+  const unsigned char* constBytes() const { return const_cast<Image*>(this)->bytes(); }
+  unsigned int* pixels() { return (unsigned int*)bytes(); }
+  const unsigned int* constPixels() const { return (const unsigned int*)constBytes(); }
+  unsigned char* bytesOnce() const;
   int dataLen() const { return width*height*4; }
   int getWidth() const { return width; }
   int getHeight() const { return height; }
@@ -39,6 +40,7 @@ public:
   EncodeBuff encodeJPEG(int quality = 75) const;
 
   void fill(unsigned int color);
+  void fillRect(Rect rect, unsigned int color);
   Image scaled(int w, int h) const;  // return a scaled version of the image
   Image transformed(const Transform2D& tf) const;
   Image cropped(const Rect& src) const;

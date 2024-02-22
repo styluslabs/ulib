@@ -198,7 +198,7 @@ bool readFile(Container* buff, const char* filename)
   // ftell returns -1 on error (e.g. if file is a directory)
   if(size > 0) {
     rewind(f);
-    // insert after an existing contents
+    // insert after any existing contents
     size_t offset = buff->size();
     buff->resize(offset + size);
     // C++11 guarantees this will work for std::string

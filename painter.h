@@ -20,7 +20,6 @@ public:
   }
   static Color fromRgb(unsigned int argb) { return Color(swapRB(argb) | A); }
   static Color fromArgb(unsigned int argb) { return Color(swapRB(argb)); }
-  static Color fromHSV(int h, int s, int v, int a = 255);
   static Color fromFloat(float r, float g, float b, float a = 1.0)
     { return Color(int(r*255 + 0.5), int(g*255 + 0.5), int(b*255 + 0.5), int(a*255 + 0.5)); }
 
@@ -43,10 +42,6 @@ public:
   int green() const { return (color >> SHIFT_G) & 255; }
   int blue() const { return (color >> SHIFT_B) & 255; }
   int luma() const { return int(0.2126*red() + 0.7152*green() + 0.0722*blue() + 0.5); }
-
-  int hueHSV() const;  // 0 - 360
-  int satHSV() const;  // 0 - 255
-  int valueHSV() const;  // 0 - 255
 
   bool isValid() const { return color != Color::INVALID_COLOR; }
   Color opaque() const { return Color(color | A); }
@@ -90,6 +85,19 @@ public:
   static constexpr color_t CYAN = A | G | B;
 };
 
+struct ColorF {
+  float r,g,b,a;
+  //union { float rgba[4]; struct { float r,g,b,a; }; };
+  ColorF(float _r = 0.f, float _g = 0.f, float _b = 0.f, float _a = 1.0f) : r(_r), g(_g), b(_b), a(_a) {}
+  ColorF(const Color& c) : r(c.red()/255.0f), g(c.green()/255.0f), b(c.blue()/255.0f), a(c.alpha()/255.0f) {}
+  float hueHSV() const;  // 0 - 360
+  float satHSV() const;  // 0 - 1
+  float valueHSV() const;  // 0 - 1
+  Color toColor() const { return Color::fromFloat(r, g, b, a); }
+
+  static ColorF fromHSV(float h, float s, float v, float a = 1.0f);
+};
+
 struct GradientStop
 {
   GradientStop(real p, Color c) : first(p), second(c) {}
@@ -98,6 +106,16 @@ struct GradientStop
 };
 
 typedef std::vector<GradientStop> GradientStops;
+
+class UniqueHandle
+{
+public:
+  int handle = -1;
+  UniqueHandle(int v) : handle(v) {}
+  UniqueHandle(const UniqueHandle& other);  // = delete;
+  UniqueHandle(UniqueHandle&& other) : handle(std::exchange(other.handle, -1)) {}
+  UniqueHandle& operator=(UniqueHandle&& other) { std::swap(handle, other.handle); return *this; }
+};
 
 class Gradient
 {
@@ -109,11 +127,11 @@ public:
   union { LinearGradCoords linear; RadialGradCoords radial; BoxGradCoords box; } coords;
   GradientStops gradStops;
   Rect objectBBox;
+  mutable UniqueHandle painterHandle = -1;
 
   enum CoordinateMode { userSpaceOnUseMode, ObjectBoundingMode } coordMode = ObjectBoundingMode;
   enum Spread { PadSpread, RepeatSpread, ReflectSpread };
-  // SVG gradients always use ComponentInterpolation mode
-  //enum InterpolationMode { ComponentInterpolation };
+  enum ColorInterpolation { sRGBColorInterp, LinearColorInterp } colorInterp = sRGBColorInterp;
 
   static Gradient linear(real x1, real y1, real x2, real y2)
       { return Gradient(LinearGradCoords{x1, y1, x2, y2}); }
@@ -125,16 +143,20 @@ public:
   Gradient(LinearGradCoords c) : type(Linear) { coords.linear = c; }
   Gradient(RadialGradCoords c) : type(Radial) { coords.radial = c; }
   Gradient(BoxGradCoords c) : type(Box) { coords.box = c; }
+  Gradient(const Gradient& other) = default;
+  Gradient(Gradient&& other) = default;
+  void invalidate() const;
+  ~Gradient() { invalidate(); }
 
   void setSpread(Spread spread) {}
   void setCoordinateMode(CoordinateMode mode) { coordMode = mode; }
   CoordinateMode coordinateMode() const { return coordMode; }
-  //void setInterpolationMode(InterpolationMode mode) {}
+  void setColorInterp(ColorInterpolation mode) { colorInterp = mode; }
   const GradientStops& stops() const { return gradStops; }
-  void setStops(GradientStops stops) { gradStops = stops; }
-  void clearStops() { gradStops.clear(); }
-  // technically, stops should be sorted by pos I think
-  void setColorAt(real pos, Color color) { gradStops.emplace_back(pos, color); }
+  void setStops(GradientStops stops) { gradStops = stops; invalidate(); }
+  void clearStops() { gradStops.clear(); invalidate(); }
+  // stops should be added in order
+  void addStop(real pos, Color color) { gradStops.emplace_back(pos, color); invalidate(); }
   void setObjectBBox(const Rect& r) { objectBBox = r; }
 };
 
@@ -169,15 +191,15 @@ public:
 class Image;
 class Path2D;
 struct NVGLUframebuffer;
+struct NVGSWUblitter;
 
 class Painter
 {
 public:
-  static NVGcontext* vg;
-  static bool vgInUse;
-  static bool sRGB;
-  static bool glRender;
+  static Painter* cachingPainter;  // painter instance for caching images (i.e. as textures)
+  static FONScontext* fontStash;
   static std::string defaultFontFamily;
+  static int maxCachedBytes;
 
   static constexpr int NOT_SUPPORTED = 2000;
   static constexpr int COMP_OP_BASE = 1000;
@@ -224,6 +246,7 @@ public:
   enum CapStyle {InheritCap = -1, FlatCap = NVG_BUTT, RoundCap = NVG_ROUND, SquareCap = NVG_SQUARE};
   enum JoinStyle {InheritJoin = -1, MiterJoin = NVG_MITER, RoundJoin = NVG_ROUND, BevelJoin = NVG_BEVEL};
   enum VectorEffect { NoVectorEffect = 0, NonScalingStroke = 1 };
+  enum StrokeAlign { StrokeCenter = 0, StrokeInner = 1, StrokeOuter = 2};
   enum ImageFlags { ImagePremult = NVG_IMAGE_PREMULTIPLIED, ImageNoCopy = NVG_IMAGE_NOCOPY };
 
   //enum FontWeight { WeightLight, WeightNormal, WeightDemiBold, WeightBold, WeightBlack };
@@ -245,6 +268,7 @@ public:
     CapStyle strokeCap = FlatCap;
     JoinStyle strokeJoin = BevelJoin;
     VectorEffect strokeEffect = NoVectorEffect;
+    StrokeAlign strokeAlign = StrokeCenter;
     // font
     //std::string fontFamily;
     short fontId = -1, boldFontId = -1, italicFontId = -1, boldItalicFontId = -1;
@@ -266,21 +290,38 @@ public:
 
   Rect deviceRect;
   Color bgColor = Color::WHITE;
+  float atlasTextThresh = 0;
   Image* targetImage = NULL;
   NVGLUframebuffer* nvgFB = NULL;
+  NVGSWUblitter* swBlitter = NULL;
+  NVGcontext* vg = NULL;
+  int createFlags = 0;
+  // members for keeping track of and clearing GL textures for images
+  int cachedBytes = 0;
+  std::vector<int> imgHandles;
 
-  Painter();
-  Painter(Image* image);
+  enum CreateFlags { PAINT_NULL = 0, PAINT_SW = 1, PAINT_GL = 2, /*PAINT_VTEX = 3,*/ PAINT_MASK = 3,
+      PRIVATE_FONTS = 1<<2, NO_TEXT = 1<<3, MULTITHREAD = 1<<4, SRGB_AWARE = 1<<5, SW_NO_XC = 1<<6,
+      SW_BLIT_GL = 1<<7, CACHE_IMAGES = 1<<8, PAINT_DEBUG_GL = 1<<9 };
+
+  Painter(int flags, Image* image = NULL);
+  Painter(NVGcontext* _vg, Image* image = NULL);
+  //Painter(Image* image, NVGcontext* _vg);
   ~Painter();
 
   PainterState& currState() { return painterStates.back(); }
   const PainterState& currState() const { return painterStates.back(); }
+  bool usesGPU() const;
+  bool sRGB() const;
   void save();
   void restore();
   void reset();
 
   void beginFrame(real pxRatio = 1.0);
   void endFrame();
+
+  void setTarget(Image* image);
+  void blitImageToScreen(Rect dirty, bool blend = false);
 
   // transformations
   void translate(real x, real y) { nvgTranslate(vg, x, y);  }
@@ -339,6 +380,8 @@ public:
   const float* dashArray() const { return currState().strokeDashes; }
   void setDashOffset(real offset);
   real dashOffset() const { return currState().strokeDashOffset; }
+  void setStrokeAlign(StrokeAlign align) { currState().strokeAlign = align; }
+  StrokeAlign strokeAlign() const { return currState().strokeAlign; }
   // font
   void setFontSize(real px);
   real fontSize() const { return currState().fontPixelSize; }
@@ -352,6 +395,8 @@ public:
   FontStyle fontStyle() const { return currState().fontStyle; }
   void setCapitalization(FontCapitalization c) { currState().fontCaps = c; }
   FontCapitalization capitalization() const { return currState().fontCaps; }
+  void setAtlasTextThreshold(float thresh);
+
   void setsRGBAdjAlpha(bool adj) { currState().sRGBAdjAlpha = adj; }
   void setColorXorMask(color_t mask) { currState().colorXorMask = mask; }
 
@@ -360,7 +405,7 @@ public:
   Color backgroundColor() const { return bgColor; }
 
   // text measurement
-  real textBounds(real x, real y, const char* start, const char* end, Rect* boundsout = NULL);
+  real textBounds(real x, real y, const char* start, const char* end = NULL, Rect* boundsout = NULL);
   int textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<Rect>* pos_out);
   real textLineHeight();
 
@@ -368,10 +413,11 @@ public:
   NVGcolor colorToNVGColor(Color c, float alpha = -1);
 
   // static methods
-  static void invalidateImage(int handle);
-  static bool loadFont(const char* name, const char* filename);
-  static bool loadFontMem(const char* name, unsigned char* data, int len);
-  static bool addFallbackFont(const char* name, const char* fallback);
+  static void invalidateImage(int handle, int len);
+  static void initFontStash(int flags, int pad = 4, float pixdist = 32.0f);
+  static bool loadFont(const char* name, const char* filename, Painter* painter = NULL);
+  static bool loadFontMem(const char* name, unsigned char* data, int len, Painter* painter = NULL);
+  static bool addFallbackFont(const char* name, const char* fallback, Painter* painter = NULL);
 
 private:
   void resolveFont();

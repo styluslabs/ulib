@@ -38,6 +38,22 @@ Container<std::string, Container_Params... > splitStr(const char* s, char delim,
 }
 
 template<template<class, class...> class Container, class... Container_Params>
+Container<std::string, Container_Params... > splitStr(std::string s, const char* delims, bool skip_empty = false)
+{
+  Container<std::string, Container_Params... > elems;
+  std::string item;
+  size_t start = 0, end = 0;
+  while((end = s.find_first_of(delims, start)) != std::string::npos) {
+    if(!skip_empty || end > start)
+      elems.insert(elems.end(), s.substr(start, end-start));
+    start = end + 1;
+  }
+  if(start < s.size())
+    elems.insert(elems.end(), s.substr(start));
+  return elems;
+}
+
+template<template<class, class...> class Container, class... Container_Params>
 Container<char*, Container_Params... > splitStrInPlace(char* str, const char* sep)
 {
   Container<char*, Container_Params... > res;

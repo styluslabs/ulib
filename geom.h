@@ -36,6 +36,7 @@ public:
   bool isZero() const { return x == 0 && y == 0; }
   bool isNaN() const { return std::isnan(x) || std::isnan(y); }
   Point& normalize() { if(x != 0 || y != 0) { real d = dist(); x /= d; y /= d; } return *this; }
+  Point& clamp(real l, real u) { x = std::min(std::max(x,l),u); y = std::min(std::max(y,l),u); return *this; }
 
   Point& operator+=(const Point& p) { x += p.x; y += p.y; return *this; }
   Point& operator-=(const Point& p) { x -= p.x; y -= p.y; return *this; }

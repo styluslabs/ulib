@@ -54,8 +54,10 @@ Image::Image(const Image& other) : width(other.width), height(other.height), dat
    encData(other.encData), encoding(other.encoding), painterHandle(-1)
 {
   int n = width*height*4;
-  data = (unsigned char*)malloc(n);
-  memcpy(data, other.data, n);
+  if(other.data) {
+    data = (unsigned char*)malloc(n);
+    memcpy(data, other.data, n);
+  }
 }
 
 Image Image::fromPixels(int w, int h, unsigned char* d, Encoding imgfmt)
@@ -81,33 +83,26 @@ Image::~Image()
 void Image::invalidate()
 {
   encData.clear();
-  Painter::invalidateImage(painterHandle);
+  Painter::invalidateImage(painterHandle, dataLen());
   painterHandle = -1;
 }
 
 // use Painter for image transformations
 Image Image::transformed(const Transform2D& tf) const
 {
-  // w/ SW renderer, cached texture may have different color ordering, so force creation of new texture
-  int handle = painterHandle;
-  if(!Painter::glRender)
-    painterHandle = -1;
   // apply transform to bounding rect to determine size of output image
   Rect b = tf.mapRect(Rect::wh(width, height));
   int wout = std::ceil(b.width());
   int hout = std::ceil(b.height());
   Image out(wout, hout, encoding);
-  Painter painter(&out);
+  int usegpu = Painter::cachingPainter && Painter::cachingPainter->usesGPU() && (width * height > 1<<20);
+  Painter painter(Painter::PAINT_SW | (usegpu ? Painter::PAINT_GL : 0), &out);
   painter.setBackgroundColor(Color::TRANSPARENT_COLOR);
   painter.beginFrame();
   painter.transform(Transform2D().translate(-b.left, -b.top) * tf);
   // all scaling done by transform, so pass dest = src so drawImage doesn't scale
   painter.drawImage(Rect::wh(width, height), *this, Rect(), Painter::ImageNoCopy);
   painter.endFrame();
-  if(!Painter::glRender) {
-    Painter::invalidateImage(painterHandle);
-    painterHandle = handle;  // restore normal painter handle
-  }
   return out;
 }
 
@@ -140,6 +135,20 @@ void Image::fill(unsigned int color)
     px[ii] = color;
 }
 
+void Image::fillRect(Rect rect, unsigned int color)
+{
+  invalidate();
+  unsigned int* px = pixels();
+  int x0 = std::max(0, int(rect.left));
+  int y0 = std::max(0, int(rect.top));
+  int x1 = std::min(int(std::ceil(rect.right)), width);
+  int y1 = std::min(int(std::ceil(rect.bottom)), height);
+  for(int iy = y0; iy < y1; ++iy) {
+    for(int ix = x0; ix < x1; ++ix)
+      px[iy*width + ix] = color;
+  }
+}
+
 // only used for comparing test images, so we don't care about performance
 Image& Image::subtract(const Image& other, int scale, int offset)
 {
@@ -159,12 +168,13 @@ bool Image::operator==(const Image& other) const
 {
   if(width != other.width || height != other.height)
     return false;
-  return memcmp(data, other.data, dataLen()) == 0;
+  return memcmp(constBytes(), other.constBytes(), dataLen()) == 0;
 }
 
 bool Image::hasTransparency() const
 {
-  unsigned int* pixels = (unsigned int*)data;
+  if(encoding == JPEG && !data) return false;  // unmodified from JPEG source implies no transparency
+  const unsigned int* pixels = constPixels();
   for(int ii = 0; ii < width*height; ++ii) {
     if((pixels[ii] & 0xFF000000) != 0xFF000000)
       return true;
@@ -183,6 +193,13 @@ bool Image::hasTransparency() const
 //#define STB_IMAGE_IMPLEMENTATION -- we expect this to be done somewhere else
 #include "stb_image.h"
 
+unsigned char* Image::bytesOnce() const
+{
+  if(data || encData.empty()) return data;
+  int w = 0, h = 0;
+  return stbi_load_from_memory(encData.data(), encData.size(), &w, &h, NULL, 4);  // request 4 channels (RGBA)
+}
+
 Image Image::decodeBuffer(const unsigned char* buff, size_t len, Encoding formatHint)
 {
   if(!buff || len < 16)
@@ -195,8 +212,9 @@ Image Image::decodeBuffer(const unsigned char* buff, size_t len, Encoding format
 
 #ifdef USE_STB_IMAGE
   int w = 0, h = 0;
-  unsigned char* data = stbi_load_from_memory(buff, len, &w, &h, NULL, 4);  // request 4 channels (RGBA)
-  return Image(w, h, data, formatHint, EncodeBuff(buff, buff+len));  //formatHint == JPEG ?
+  stbi_info_from_memory(buff, len, &w, &h, NULL);
+  //unsigned char* data = stbi_load_from_memory(buff, len, &w, &h, NULL, 4);  // request 4 channels (RGBA)
+  return Image(w, h, NULL, formatHint, EncodeBuff(buff, buff+len));  //formatHint == JPEG ?
 #else
   if(formatHint == PNG)
     return decodePNG(buff, len);
