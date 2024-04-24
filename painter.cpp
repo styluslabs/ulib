@@ -351,7 +351,14 @@ void Painter::clipRect(Rect r)
       r = tf.inverse().mapRect(tf.mapRect(r).round());
     Rect curr = currState().clipBounds;
     currState().clipBounds = curr.isValid() ? curr.rectIntersect(tf.mapRect(r)) : tf.mapRect(r);
-    nvgIntersectScissor(vg, r.left, r.top, r.width(), r.height());
+    if(createFlags & ALIGN_SCISSOR) {
+      r = currState().clipBounds;
+      nvgResetTransform(vg);
+      nvgScissor(vg, r.left, r.top, r.width(), r.height());
+      transform(tf);
+    }
+    else
+      nvgIntersectScissor(vg, r.left, r.top, r.width(), r.height());
   }
 }
 
@@ -533,7 +540,13 @@ real Painter::drawText(real x, real y, const char* start, const char* end)
     y = 0;
   }
   real nextx = nvgTextAsPaths(vg, x, y, start, end);
-  endPath();
+  if(!currState().strokeBrush.isNone() && currState().strokeAlign == StrokeOuter) {
+    nvgStroke(vg);
+    if(!currState().fillBrush.isNone())
+      nvgFill(vg);
+  }
+  else
+    endPath();
   if(faux) restore();  //nvgRestore(vg);
   return nextx;
 }
@@ -562,6 +575,18 @@ int Painter::textGlyphPositions(real x, real y, const char* start, const char* e
     pos_out->push_back(Rect::ltrb(positions[ii].minx, y, positions[ii].maxx, y));
   delete[] positions;
   return npos;
+}
+
+std::string Painter::textBreakLines(const char* start, const char* end, float width, int maxLines)
+{
+  std::vector<FONStextRow> rows(maxLines);
+  int nlines = nvgTextBreakLines(vg, start, end, width, rows.data(), maxLines);
+  if(nlines <= 0) return "";
+  std::string res(rows[0].start, rows[0].end - rows[0].start);
+  for(int ii = 1; ii < nlines; ++ii) {
+    res.append("\n").append(rows[ii].start, rows[ii].end - rows[ii].start);
+  }
+  return res;
 }
 
 real Painter::textLineHeight()

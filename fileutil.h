@@ -172,8 +172,8 @@ Timestamp getFileMTime(const FSPath& filename);
 long getFileSize(const FSPath& filename);
 std::vector<std::string> lsDirectory(const FSPath& name);
 bool createDir(const std::string& dir);
-bool createPath(const std::string& pathname);
-bool removeDir(const std::string& path, bool rmtopdir = true);
+bool createPath(const FSPath& pathname);
+bool removeDir(const FSPath& path, bool rmtopdir = true);
 bool copyFile(FSPath src, FSPath dest);
 bool moveFile(FSPath src, FSPath dest);
 bool removeFile(const std::string& name);
@@ -349,14 +349,13 @@ long getFileSize(const FSPath& filename)
   return size;
 }
 
-bool createPath(const std::string& pathname)
+bool createPath(const FSPath& path)
 {
-  if(pathname.empty()) {
+  if(path.isEmpty()) {
     ASSERT(0 && "createPath() passed empty path!");
     return false;
   }
-  FSPath path(pathname);
-  return path.exists() || (createPath(path.parentPath().c_str()) && createDir(pathname));
+  return path.exists() || (createPath(path.parentPath().c_str()) && createDir(path.path));
 }
 
 bool isDirectory(const char* path)
@@ -576,20 +575,20 @@ std::string wstr_to_utf8(wchar_t* wstr)
 #endif
 
 // `rm -r <path>`
-bool removeDir(const std::string& path, bool rmtopdir)
+bool removeDir(const FSPath& path, bool rmtopdir)
 {
-  ASSERT(path.size() > 1 && path != "..");
+  ASSERT(path.path.size() > 1 && path.path != "..");
   auto contents = lsDirectory(path);
   bool ok = true;
 
   for(const std::string& child : contents) {
-    FSPath childpath(path, child.c_str());
-    ok = (childpath.isDir() ? removeDir(childpath.c_str()) : removeFile(childpath.path)) && ok;
+    FSPath childpath = path.child(child);
+    ok = (childpath.isDir() ? removeDir(childpath) : removeFile(childpath.path)) && ok;
   }
 #if PLATFORM_WIN
   return rmtopdir ? (RemoveDirectory(PLATFORM_STR(path.c_str())) != 0 && ok) : ok;
 #else
-  return rmtopdir ? (removeFile(path) && ok) : ok;
+  return rmtopdir ? (removeFile(path.path) && ok) : ok;
 #endif
 }
 
