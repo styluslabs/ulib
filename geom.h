@@ -136,6 +136,7 @@ public:
   real yscale() const { return m[3]; }
   real avgScale() const;
   real* asArray() { return &m[0]; }
+  const real* asArray() const { return &m[0]; }
 
   Rect mapRect(const Rect& r) const { return mult(r); }
   Point map(const Point& p) const { return mult(p); }

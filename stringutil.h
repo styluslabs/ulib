@@ -187,6 +187,11 @@ inline std::string base64_encode(const std::string& str) { return base64_encode(
 inline std::string base64_encode(const std::vector<unsigned char>& str) { return base64_encode(str.data(), str.size()); }
 inline std::vector<unsigned char> base64_decode(const std::string& str) { return base64_decode(str.data(), str.size()); }
 
+inline std::string trimStr(const std::string& s)
+{
+  return StringRef(s).trimmed().toString();
+}
+
 template<int N>
 static int indexOfStr(const StringRef& value, const char* const (&strs)[N])
 {
@@ -380,7 +385,7 @@ const char* findWord(const char* str, const char* word, char sep)
   const char* s = str;
   for(;;) {
     s = strstr(s, word);
-    if(!s)
+    if(!s || !word[0])  // prevent infinite loop if empty string passed
       return NULL;
     if(!l)
       l = strlen(word);
