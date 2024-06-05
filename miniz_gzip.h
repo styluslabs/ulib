@@ -11,6 +11,7 @@
 
 #ifdef __cplusplus
 #include <iostream>
+#include <stdint.h>
 
 static size_t stream_read(void* dest, size_t len, void* ctx)
 {
