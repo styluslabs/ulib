@@ -58,7 +58,7 @@ public:
   static Image* decodePNG(const char* buff, size_t len);
   static Image* decodeJPEG(const char* buff, size_t len);
 #endif
-  static Image decodeBuffer(const unsigned char* buff, size_t len, Encoding formatHint = UNKNOWN);
+  static Image decodeBuffer(const void* buff, size_t len, Encoding formatHint = UNKNOWN);
   static Image fromPixels(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
   static Image fromPixelsNoCopy(int w, int h, unsigned char* d, Encoding imgfmt = UNKNOWN);
 protected:

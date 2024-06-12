@@ -201,26 +201,27 @@ unsigned char* Image::bytesOnce() const
   return stbi_load_from_memory(encData.data(), encData.size(), &w, &h, NULL, 4);  // request 4 channels (RGBA)
 }
 
-Image Image::decodeBuffer(const unsigned char* buff, size_t len, Encoding formatHint)
+Image Image::decodeBuffer(const void* buff, size_t len, Encoding formatHint)
 {
   if(!buff || len < 16)
     return Image(0, 0);
 
-  if(buff[0] == 0xFF && buff[1] == 0xD8)
+  const unsigned char* cbuff = (const unsigned char*)buff;
+  if(cbuff[0] == 0xFF && cbuff[1] == 0xD8)
     formatHint = JPEG;
-  else if(memcmp(buff, "\x89PNG", 4) == 0)
+  else if(memcmp(cbuff, "\x89PNG", 4) == 0)
     formatHint = PNG;
 
 #ifdef USE_STB_IMAGE
   int w = 0, h = 0;
-  stbi_info_from_memory(buff, len, &w, &h, NULL);
+  stbi_info_from_memory(cbuff, len, &w, &h, NULL);
   //unsigned char* data = stbi_load_from_memory(buff, len, &w, &h, NULL, 4);  // request 4 channels (RGBA)
-  return Image(w, h, NULL, formatHint, EncodeBuff(buff, buff+len));  //formatHint == JPEG ?
+  return Image(w, h, NULL, formatHint, EncodeBuff(cbuff, cbuff+len));  //formatHint == JPEG ?
 #else
   if(formatHint == PNG)
-    return decodePNG(buff, len);
+    return decodePNG(cbuff, len);
   else //if(formatHint == JPEG)
-    return decodeJPEG(buff, len);
+    return decodeJPEG(cbuff, len);
 #endif
 }
 
