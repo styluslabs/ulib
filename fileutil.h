@@ -163,6 +163,7 @@ public:
     { return isRoot() ? "" : path.substr(0, path.find_last_of('/', path.size() - 2) + 1); }
   FSPath parent() const { return FSPath(parentPath()); }
   FSPath dir() const { return parent(); }
+  std::string relativeTo(FSPath base);
 private:
   void normalize();
 };
@@ -182,6 +183,7 @@ std::string canonicalPath(const FSPath& path);
 std::string getCwd();
 bool truncateFile(const char* filename, size_t len);
 std::string sysExec(const char* cmd);
+std::string toValidFilename(std::string s, char replacement = '_');
 
 // read an entire file into a container - supports vector<char> or string
 // using C fns is faster than ifstream!
@@ -387,6 +389,42 @@ std::string canonicalPath(const FSPath& path)
   if(!p.isDir() && (path.isDir() || isDirectory(p.c_str())))
     p.path.push_back('/');
   return p.path;
+}
+
+std::string FSPath::relativeTo(FSPath base)
+{
+  FSPath p(isAbsolute() ? path : getCwd() + "/" + path);
+  std::vector<std::string> pdirs;
+  while(!p.isRoot() && !p.isEmpty()) {
+    pdirs.emplace_back(p.fileName());  // drop trailing '/'
+    p = p.parent();
+  }
+
+  FSPath b(base.isAbsolute() ? base.path : getCwd() + "/" + base.path);
+  std::vector<std::string> bdirs;
+  while(!b.isRoot() && !b.isEmpty()) {
+    bdirs.emplace_back(b.fileName());  // drop trailing '/'
+    b = b.parent();
+  }
+
+  while(!bdirs.empty() && !pdirs.empty() && bdirs.back() == pdirs.back()) {
+    bdirs.pop_back();
+    pdirs.pop_back();
+  }
+  std::string res;
+  for(; !bdirs.empty(); bdirs.pop_back()) res.append("../");
+  for(; !pdirs.empty(); pdirs.pop_back()) res.append(pdirs.back()).append("/");
+  if(!isDir()) res.pop_back();  // remove trailing '/'
+  return res;
+}
+
+// for now, just use most restrictive set of disallowed chars (Windows/Android)
+std::string toValidFilename(std::string s, char replacement)
+{
+  size_t pos = 0;
+  while((pos = s.find_first_of("<>:|?*\"\\/", pos)) != std::string::npos)
+    s[pos++] = replacement;
+  return s;
 }
 
 std::string readFile(const char* filename)
