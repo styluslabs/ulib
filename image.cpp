@@ -254,7 +254,7 @@ static unsigned char* mz_stbiw_zlib_compress(unsigned char *data, int data_len, 
 #define STBIW_ZLIB_COMPRESS  mz_stbiw_zlib_compress
 #endif // NO_MINIZ
 
-#define STBI_WRITE_NO_STDIO
+//#define STBI_WRITE_NO_STDIO
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
