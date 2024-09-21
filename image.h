@@ -44,7 +44,7 @@ public:
   Image scaled(int w, int h) const;  // return a scaled version of the image
   Image transformed(const Transform2D& tf) const;
   Image cropped(const Rect& src) const;
-  bool isNull() const { return !data; }
+  bool isNull() const { return !data && encData.empty(); }
   bool operator==(const Image& other) const;
   bool operator!=(const Image& other) const { return !operator==(other); }
 

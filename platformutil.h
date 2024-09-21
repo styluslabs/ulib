@@ -61,6 +61,7 @@
 #define PLATFORM_LOG(...) __android_log_print(ANDROID_LOG_VERBOSE, "StylusLabs_NDK",  __VA_ARGS__)
 //typedef float Dim;
 #elif PLATFORM_WIN
+#include "stringutil.h"
 extern bool winLogToConsole;
 bool attachParentConsole();
 void winOutputDebugString(const char* str);

@@ -269,27 +269,30 @@ static void stbi_write_vec(void* context, void* data, int size)
 Image::EncodeBuff Image::encodePNG() const
 {
   //stbi_write_png_compression_level = quality;
-  if(encData.size() && encData[0] == 0x89)
+  if(encData.size() > 4 && memcmp(encData.data(), "\x89PNG", 4) == 0)
     return encData;
+  auto* b = constBytes();
+  if(!b) return {};
   EncodeBuff vbuff;
   EncodeBuff& v = encData.empty() ? encData : vbuff;
   v.reserve(dataLen()/4);  // guess at compressed size
   // returns 0 on failure ...
-  if(!stbi_write_png_to_func(&stbi_write_vec, &v, width, height, 4, data, width*4))
+  if(!stbi_write_png_to_func(&stbi_write_vec, &v, width, height, 4, b, width*4))
     v.clear();
   return v;
 }
 
 Image::EncodeBuff Image::encodeJPEG(int quality) const
 {
-  if(encData.size() && encData[0] != 0xFF)  //encoding != JPEG)
+  if(encData.size() && encData[0] == 0xFF)
+    return encData;
+  auto* b = constBytes();
+  if(!b) return {};
+  encData.clear();
+  encData.reserve(dataLen()/4);
+  // returns 0 on failure ...
+  if(!stbi_write_jpg_to_func(&stbi_write_vec, &encData, width, height, 4, b, quality))
     encData.clear();
-  if(encData.empty()) {
-    encData.reserve(dataLen()/4);
-    // returns 0 on failure ...
-    if(!stbi_write_jpg_to_func(&stbi_write_vec, &encData, width, height, 4, data, quality))
-      encData.clear();
-  }
   return encData;  // makes a copy unavoidably
 }
 
