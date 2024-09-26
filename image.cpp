@@ -97,12 +97,12 @@ Image Image::transformed(const Transform2D& tf) const
   int hout = std::ceil(b.height());
   Image out(wout, hout, encoding);
   int usegpu = Painter::cachingPainter && Painter::cachingPainter->usesGPU() && (width * height > 1<<20);
-  Painter painter(Painter::PAINT_SW | (usegpu ? Painter::PAINT_GL : 0), &out);
+  Painter painter(usegpu ? Painter::PAINT_GL : Painter::PAINT_SW, &out);
   painter.setBackgroundColor(Color::TRANSPARENT_COLOR);
   painter.beginFrame();
   painter.transform(Transform2D().translate(-b.left, -b.top) * tf);
   // all scaling done by transform, so pass dest = src so drawImage doesn't scale
-  painter.drawImage(Rect::wh(width, height), *this, Rect(), Painter::ImageNoCopy);
+  painter.drawImage(Rect::wh(width, height), *this, Rect(), data ? Painter::ImageNoCopy : 0);
   painter.endFrame();
   return out;
 }
