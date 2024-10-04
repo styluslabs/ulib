@@ -353,10 +353,12 @@ std::string randomStr(const unsigned int len);
 #ifdef STRINGUTIL_IMPLEMENTATION
 #undef STRINGUTIL_IMPLEMENTATION
 
+#ifndef STRINGUTIL_NO_STB_IMPL
 // unaligned access crashes on 32-bit ARM (Android) and seems like a bad idea anyway
 #define STB_SPRINTF_NOUNALIGNED
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
+#endif
 
 static char* stb_sprintfcb(const char* buf, void* user, int len)
 {
