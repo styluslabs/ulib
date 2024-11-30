@@ -144,9 +144,20 @@ void Image::fillRect(Rect rect, unsigned int color)
   int y0 = std::max(0, int(rect.top));
   int x1 = std::min(int(std::ceil(rect.right)), width);
   int y1 = std::min(int(std::ceil(rect.bottom)), height);
-  for(int iy = y0; iy < y1; ++iy) {
-    for(int ix = x0; ix < x1; ++ix)
-      px[iy*width + ix] = color;
+
+  if(color == 0 || color == 0xFFFFFFFF) {
+    if(x0 == 0 && x1 == width)
+      memset(&px[y0*width], color, 4*width*(y1 - y0));
+    else {
+      for(int iy = y0; iy < y1; ++iy)
+        memset(&px[iy*width + x0], color, 4*(x1 - x0));
+    }
+  }
+  else {
+    for(int iy = y0; iy < y1; ++iy) {
+      for(int ix = x0; ix < x1; ++ix)
+        px[iy*width + ix] = color;
+    }
   }
 }
 

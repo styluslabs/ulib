@@ -173,8 +173,8 @@ void Painter::beginFrame(real pxRatio)
 
 #ifndef NO_PAINTER_SW
   if(swBlitter) {
-    bool sizeChanged = (fbWidth != swBlitter->width || fbHeight != swBlitter->height);
-    if(!targetImage || sizeChanged) {
+    //bool sizeChanged = (fbWidth != swBlitter->width || fbHeight != swBlitter->height);
+    if(!targetImage || targetImage->getWidth() != fbWidth || targetImage->getHeight() != fbHeight) { //sizeChanged) {
       delete targetImage;
       targetImage = new Image(fbWidth, fbHeight);
     }
