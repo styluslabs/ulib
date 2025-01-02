@@ -113,6 +113,7 @@ void Path2D::addArc(real cx, real cy, real rx, real ry, real startRad, real swee
     pushPoint(Point(startRad, sweepRad));
   }
   else {
+    sweepRad = std::min(std::max(sweepRad, -2*M_PI), 2*M_PI);
     int n_segs = std::ceil(std::abs(sweepRad / (M_PI * 0.5 + 0.001)));
     for(int i = 0; i < n_segs; i++) {
       pathArcSegment(this, cx/rx, cy/ry, startRad + i * sweepRad / n_segs,
