@@ -565,15 +565,16 @@ real Painter::textBounds(real x, real y, const char* s, const char* end, Rect* b
   return advX;
 }
 
-int Painter::textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<Rect>* pos_out)
+int Painter::textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<GlyphPosition>* pos_out)
 {
   auto lock = getFonsLock(this);
   size_t len = end ? end - start : strlen(start);
-  NVGglyphPosition* positions = new NVGglyphPosition[len];
-  int npos = nvgTextGlyphPositions(vg, x, y, start, end, positions, len);
-  for(int ii = 0; ii < npos; ++ii)
-    pos_out->push_back(Rect::ltrb(positions[ii].minx, y, positions[ii].maxx, y));
-  delete[] positions;
+  std::vector<NVGglyphPosition> positions(len);
+  int npos = nvgTextGlyphPositions(vg, x, y, start, end, positions.data(), len);
+  for(int ii = 0; ii < npos; ++ii) {
+    auto& p = positions[ii];
+    pos_out->push_back({size_t(p.str - start), p.x, p.minx, p.maxx});  //Rect::ltrb(positions[ii].minx, y, positions[ii].maxx, y));
+  }
   return npos;
 }
 

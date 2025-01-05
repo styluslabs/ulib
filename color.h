@@ -185,3 +185,7 @@ public:
 
   static constexpr color_t NONE = Color::NONE;
 };
+
+// text related stuff
+
+struct GlyphPosition { size_t idx; real x, left, right; };

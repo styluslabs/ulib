@@ -225,7 +225,7 @@ public:
 
   // text measurement
   real textBounds(real x, real y, const char* start, const char* end = NULL, Rect* boundsout = NULL);
-  int textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<Rect>* pos_out);
+  int textGlyphPositions(real x, real y, const char* start, const char* end, std::vector<GlyphPosition>* pos_out);
   std::string textBreakLines(const char* start, const char* end, float width, int maxLines);
   real textLineHeight();
 
