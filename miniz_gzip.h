@@ -374,7 +374,7 @@ int main(int argc, char* argv[])
 #endif //MINIZ_GZ_UTIL
 
 // To build test executable (replace .. with path to directory containing miniz/ as needed)
-//   g++ -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h
+//   g++ -march=native -O3 -DMINIZ_GZ_TEST -DMINIZ_GZ_IMPLEMENTATION -isystem .. -o gztest -x c++ miniz_gzip.h ../miniz/miniz.c ../miniz/miniz_tdef.c ../miniz/miniz_tinfl.c
 #ifdef MINIZ_GZ_TEST
 #include <sstream>
 #include <fstream>
@@ -383,10 +383,6 @@ int main(int argc, char* argv[])
 #include <assert.h>
 #define ASSERT assert
 #endif
-
-#include "miniz/miniz.c"
-#include "miniz/miniz_tdef.c"
-#include "miniz/miniz_tinfl.c"
 
 // test string needs to be over ~32KB to provide a good test!
 
@@ -562,6 +558,87 @@ void test_level0_block(int test_len)
   chunkSize = 1 << 20;
 }
 
+// profiling code from https://github.com/vurtun/lib
+#include <time.h>
+#include <sys/time.h>
+
+static double profiler_time(struct timespec start, struct timespec stop)
+{
+  double accum = (double)(stop.tv_sec - start.tv_sec) * 1000.0f;
+  accum += (double)(stop.tv_nsec - start.tv_nsec) / 1000000.0;
+  return accum;
+}
+
+static void get_time(struct timespec* ts) { clock_gettime(CLOCK_REALTIME, ts); }
+
+int profile_main(int argc, char **argv)
+{
+  void *comp = 0;
+  size_t size = 0;
+  struct timespec compr_started;
+  struct timespec compr_ended;
+  struct timespec decompr_started;
+  struct timespec decompr_ended;
+  double compr_mbs = 0;
+  double decompr_mbs = 0;
+  void *decomp;
+  double ratio = 0.0f;
+  unsigned long len = 0, n, lvl;
+
+  void *data = 0;
+  {
+    FILE* fp = fopen(argv[1], "rb");
+    if (!fp) exit(2);
+    fseek(fp, 0, SEEK_END);
+    size = (size_t)ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    data = calloc(size, 1);
+    fread(data, 1, (size_t)size, fp);
+    fclose(fp);
+  }
+
+  comp = calloc(size*2, 1);
+  decomp = calloc(size, 1);
+  for (lvl = 1; lvl < 10; ++lvl) {
+    len = 2*size;
+    get_time(&compr_started);
+    if(mz_compress2((unsigned char*)comp, &len, (unsigned char*)data, size, lvl) != MZ_OK) {
+      printf("mz_compress2 error!");
+      break;
+    }
+    //len = sdeflate(&sdefl, comp, data, (int)size, lvl);
+    get_time(&compr_ended);
+
+    n = size;
+    get_time(&decompr_started);
+    //n = sinflate(decomp, (int)size, comp, len);
+    if(mz_uncompress((unsigned char*)decomp, &n, (unsigned char*)comp, len) != MZ_OK) {
+      printf("mz_uncompress error!");
+      break;
+    }
+    get_time(&decompr_ended);
+
+    double compr_time = profiler_time(compr_started, compr_ended);
+    double decompr_time = profiler_time(decompr_started, decompr_ended);
+
+    ratio = (double)len / (double)size * 100.0;
+    compr_mbs = ((double)size / 1000000.0f) / (compr_time / 1000.0f);
+    decompr_mbs = ((double)size / 1000000.0f) / (decompr_time / 1000.0f);
+
+    printf("lvl: %d size: %d, compr: %.2fms (%.2fMB/s) decompr: %.2fms (%.2fMB/s) ratio: %f%% ", lvl, len, compr_time, compr_mbs, decompr_time, decompr_mbs, ratio);
+    if ((size_t)n != size || memcmp(data, decomp, (size_t)size)) {
+      //FILE *fd = fopen("error.bin", "wb");
+      //fwrite(decomp, 1, (size_t)n, fd);
+      //fclose(fd);
+
+      printf("error: %d:%d !\n", n, (int)size);
+      break;
+    }
+    else printf("\n");
+  }
+  return 0;
+}
+
 int main(int argc, char* argv[])
 {
   if(argc > 1) {
@@ -572,9 +649,10 @@ int main(int argc, char* argv[])
       for(auto& b : block_info)
         printf("block %d: offset %d, cum_len: %d\n", ii++, b.offset, b.len_cum);
     }
-    else
-      printf("No gzip blocks found!");
-
+    else {
+      printf("No gzip blocks found, profiling instead.\n\n");
+      profile_main(argc, argv);
+    }
     return 0;
   }
 

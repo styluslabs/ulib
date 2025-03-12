@@ -81,6 +81,10 @@ std::string joinStr(const std::vector<T>& strs, const char* sep)
   return ss.str();
 }
 
+// optimized specialization for std::string
+template<>
+std::string joinStr(const std::vector<std::string>& strs, const char* sep);
+
 std::string fstring(const char* fmt, ...);
 //inline std::string fstring(const char* fmt) { return fmt;  }
 
@@ -369,6 +373,7 @@ static char* stb_sprintfcb(const char* buf, void* user, int len)
 // template<class... Args>  std::string fstring(fmt, Args&&... args) -  fn(fmt, std::forward<Args>(args)...)
 std::string fstring(const char* fmt, ...)
 {
+#ifdef STB_SPRINTF_MIN
   // standard snprintf always returns number of bytes needed to print entire string, whereas stbsp_snprintf
   //  only returns this if passed buf = 0 and count = 0 (otherwise returns actual number written), so we
   //  instead use the callback version, stbsp_vsprintfcb (extra copy, but saves memory)
@@ -379,6 +384,24 @@ std::string fstring(const char* fmt, ...)
   stbsp_vsprintfcb(stb_sprintfcb, &str, buf, fmt, va);
   va_end(va);
   return str;
+#else
+  char buf[512];
+  buf[0] = '\0';
+  va_list va, va2;
+  va_start(va, fmt);
+  va_copy(va2, va);
+  int n = vsnprintf(buf, 512, fmt, va);
+  std::string str;
+  if(n < 512)
+    str = buf;
+  else {
+    str.resize(n);
+    vsnprintf(&s[0], n+1, fmt, va2);
+  }
+  va_end(va2);
+  va_end(va);
+  return str;
+#endif
 }
 
 const char* findWord(const char* str, const char* word, char sep)
@@ -458,6 +481,21 @@ std::vector<StringRef> splitStringRef(const StringRef& strRef, const char* sep, 
     start = stop + strlen(sep);
   }
   return lst;
+}
+
+template<>
+std::string joinStr(const std::vector<std::string>& strs, const char* sep)
+{
+  if(strs.size() < 2) { return strs.empty() ? std::string() : strs[0]; }
+  size_t tot = (strs.size() - 1)*strlen(sep);
+  for(auto& s : strs) { tot += s.size(); }
+  std::string res;
+  res.reserve(tot);
+  res.append(strs[0]);
+  for(size_t ii = 1; ii < strs.size(); ++ii) {
+    res.append(sep).append(strs[ii]);
+  }
+  return res;
 }
 
 std::string urlEncode(const char* s)
