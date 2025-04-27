@@ -396,7 +396,7 @@ std::string fstring(const char* fmt, ...)
     str = buf;
   else {
     str.resize(n);
-    vsnprintf(&s[0], n+1, fmt, va2);
+    vsnprintf(&str[0], n+1, fmt, va2);
   }
   va_end(va2);
   va_end(va);
