@@ -91,6 +91,10 @@ typedef int64_t Timestamp;
 
 Timestamp mSecSinceEpoch();
 
+#ifdef _MSC_VER
+#define timegm _mkgmtime
+#endif
+
 #endif
 
 #ifdef PLATFORMUTIL_IMPLEMENTATION
