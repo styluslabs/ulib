@@ -8,11 +8,15 @@
 #include "image.h"
 
 #include "fontstash.h"
+#ifndef NO_PAINTER_SW
 #include "nanovg_sw.h"
+#endif
 #ifndef NO_PAINTER_GL
 typedef uint32_t GLuint;
 #include "nanovg_vtex.h"
 #include "nanovg_gl_utils.h"
+#endif
+#ifndef NO_PAINTER_SWU
 #include "nanovg_sw_utils.h"
 #endif
 
@@ -67,18 +71,22 @@ Painter::Painter(int flags, Image* image)
     vg = nvglCreate(nvgFlags);
   }
 #endif
+#ifndef NO_PAINTER_SW
   else { //if(flags & PAINT_MASK == PAINT_SW)
     nvgFlags |= (flags & SW_NO_XC) ? 0 : NVGSW_PATHS_XC;
     vg = nvgswCreate(nvgFlags);
   }
+#endif
 
   if(sharefons)
     nvgSetFontStash(vg, fontStash);
 
+#ifndef NO_PAINTER_SWU
   if(flags & SW_BLIT_GL)
     swBlitter = nvgswuCreateBlitter();
+#endif
 
-  if(flags & CACHE_IMAGES && !cachingPainter)
+  if((flags & CACHE_IMAGES) && !cachingPainter)
     cachingPainter = this;
 
   createFlags = flags;
@@ -112,20 +120,24 @@ void Painter::setTarget(Image* image)
 
 Painter::~Painter()
 {
+  if(!vg) {}
+  else if(!nvgInternalParams(vg)->userPtr)
+    nvgNullDelete(vg);
+#ifndef NO_PAINTER_SW
+  else if(!usesGPU())
+    nvgswDelete(vg);
+#endif
+#ifndef NO_PAINTER_GL
+  else
+    nvglDelete(vg);
+  if(nvgFB)
+    nvgluDeleteFramebuffer(nvgFB);
+#endif
+#ifndef NO_PAINTER_SWU
   if(swBlitter) {
     nvgswuDeleteBlitter(swBlitter);
     delete targetImage;
   }
-  if(!vg) {}
-  else if(!nvgInternalParams(vg)->userPtr)
-    nvgNullDelete(vg);
-  else if(usesGPU())
-    nvglDelete(vg);
-  else
-    nvgswDelete(vg);
-#ifndef NO_PAINTER_GL
-  if(nvgFB)
-    nvgluDeleteFramebuffer(nvgFB);
 #endif
   if(this == cachingPainter)
     cachingPainter = NULL;
@@ -196,11 +208,11 @@ void Painter::beginFrame(real pxRatio)
 
 void Painter::endFrame()
 {
-  bool glRender = usesGPU();
   // moved from Painter::beginFrame - nanovg does not make any GL calls until endFrame, so neither should we
 #ifdef NO_PAINTER_GL
   nvgEndFrame(vg);
 #else
+  bool glRender = usesGPU();
   int prevFBO = -1;
   if(nvgFB)
     prevFBO = nvgluBindFramebuffer(nvgFB);
@@ -224,19 +236,17 @@ void Painter::endFrame()
     nvgluBindFBO(prevFBO);
   }
 #endif
-//#ifndef NO_PAINTER_SW
-//  if(targetImage && !glRender)
-//    nvgswSetFramebuffer(vg, NULL, targetImage->width, targetImage->height, 0, 8, 16, 24);
-//#endif
 }
 
 void Painter::blitImageToScreen(Rect dirty, bool blend)
 {
+#ifndef NO_PAINTER_SWU
   if(!swBlitter || !targetImage) return;
   int fbWidth = targetImage->width, fbHeight = targetImage->height;
   nvgswuSetBlend(blend);
   nvgswuBlit(swBlitter, targetImage->bytes(), fbWidth, fbHeight,
       int(dirty.left), int(dirty.top), int(dirty.width()), int(dirty.height()));
+#endif
 }
 
 bool Painter::usesGPU() const
