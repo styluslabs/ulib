@@ -164,6 +164,7 @@ void Image::fillRect(Rect rect, unsigned int color)
 // only used for comparing test images, so we don't care about performance
 Image& Image::subtract(const Image& other, int scale, int offset)
 {
+  invalidate();
   unsigned char* a = bytes();
   const unsigned char* b = other.constBytes();
   for(int ii = 0; ii < std::min(height, other.height); ++ii) {
