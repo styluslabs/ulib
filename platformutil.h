@@ -136,7 +136,7 @@ void winOutputDebugString(const char* str)
   if(!str || !str[0])
     return;
   if(winLogToConsole)
-    fprintf(stderr, str);
+    fputs(str, stderr);
   else {
     OutputDebugStringA(str);
     if(str[strlen(str)-1] != '\n')
