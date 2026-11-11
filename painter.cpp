@@ -357,8 +357,15 @@ void Painter::clipRect(Rect r)
   if(r.isValid()) {
     Transform2D tf = getTransform();
     // clip rects need to be aligned to pixel boundaries - I think we should do this in nanovg-2 instead
-    if(!tf.isRotating())
-      r = tf.inverse().mapRect(tf.mapRect(r).round());
+    if(!tf.isRotating()) {
+      // snap to nearest integer if within numerical error before rounding outward, since clip rects often come
+      //  from a round trip through a non-integer scale (e.g. getClipBounds()) and would otherwise grow by 1px
+      //  each time - for partial redraw, that means drawing outside the dirty rect
+      auto snap = [](real x) { real rx = std::round(x); return std::abs(x - rx) < 1E-6*std::max(real(1), std::abs(x)) ? rx : x; };
+      Rect dr = tf.mapRect(r);
+      dr = Rect::ltrb(snap(dr.left), snap(dr.top), snap(dr.right), snap(dr.bottom));
+      r = tf.inverse().mapRect(dr.round());
+    }
     Rect curr = currState().clipBounds;
     currState().clipBounds = curr.isValid() ? curr.rectIntersect(tf.mapRect(r)) : tf.mapRect(r);
     if(createFlags & ALIGN_SCISSOR) {
