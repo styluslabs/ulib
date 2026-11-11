@@ -342,6 +342,9 @@ Transform2D Painter::getTransform() const
   return Transform2D(m[0], m[1], m[2], m[3], m[4], m[5]);
 }
 
+// Clip rects are kept in floating point; nanovg rounds scissor edges to the nearest pixel boundary when rendering
+//  (if axis-aligned), so clips don't grow or shrink when passed through a non-integer scale and back (e.g.
+//  setClipRect(getClipBounds())).
 // PainterState.clipBounds may not be as tight as nanovg's actual scissor (if transform has any rotation) and
 //  is always in global coordinate system, whereas rect passed to (set)ClipRect is in local coordinates; clip
 //  can only be saved and restored with full save()/restore()
@@ -356,16 +359,6 @@ void Painter::clipRect(Rect r)
 {
   if(r.isValid()) {
     Transform2D tf = getTransform();
-    // clip rects need to be aligned to pixel boundaries - I think we should do this in nanovg-2 instead
-    if(!tf.isRotating()) {
-      // snap to nearest integer if within numerical error before rounding outward, since clip rects often come
-      //  from a round trip through a non-integer scale (e.g. getClipBounds()) and would otherwise grow by 1px
-      //  each time - for partial redraw, that means drawing outside the dirty rect
-      auto snap = [](real x) { real rx = std::round(x); return std::abs(x - rx) < 1E-6*std::max(real(1), std::abs(x)) ? rx : x; };
-      Rect dr = tf.mapRect(r);
-      dr = Rect::ltrb(snap(dr.left), snap(dr.top), snap(dr.right), snap(dr.bottom));
-      r = tf.inverse().mapRect(dr.round());
-    }
     Rect curr = currState().clipBounds;
     currState().clipBounds = curr.isValid() ? curr.rectIntersect(tf.mapRect(r)) : tf.mapRect(r);
     if(createFlags & ALIGN_SCISSOR) {
@@ -379,7 +372,7 @@ void Painter::clipRect(Rect r)
   }
 }
 
-// consider adding nvgCurrentScissor() to nanovg (won't include rotation however)
+// returns unrounded clip rect in local coords (pixels actually drawn are those w/ centers inside clip rect)
 Rect Painter::getClipBounds() const
 {
   // clipBounds is in global coords, so transform back to local coords
