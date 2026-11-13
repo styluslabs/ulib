@@ -500,8 +500,10 @@ std::string joinStr(const std::vector<std::string>& strs, const char* sep)
 std::string urlEncode(const char* s)
 {
   std::string res;
-  for(; *s; ++s)
-    (isalnum(*s) || *s == '-' || *s == '_' || *s == '.' || *s == '~') ? (res += *s) : (res += fstring("%%%2X", *s));
+  for(; *s; ++s) {
+    unsigned char c = (unsigned char)*s;  // unsigned so UTF-8 bytes aren't sign extended
+    (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') ? (res += char(c)) : (res += fstring("%%%02X", c));
+  }
   return res;
 }
 
