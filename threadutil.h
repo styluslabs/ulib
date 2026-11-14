@@ -46,6 +46,7 @@ public:
 #include <thread>
 #include <future>
 #include <functional>
+#include <type_traits>
 
 class ThreadPool
 {

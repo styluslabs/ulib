@@ -22,6 +22,7 @@
 //   temp buffer both directions, so we can use streams IF we can combine the conversion with stream I/O
 // STB_image: works with mem buffers natively; supports callbacks
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <utility>

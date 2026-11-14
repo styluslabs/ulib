@@ -1,6 +1,7 @@
 #ifndef FILEUTIL_H
 #define FILEUTIL_H
 
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <string>
