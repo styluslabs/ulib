@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <string.h>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <string>
 #include <sstream>
@@ -245,8 +246,10 @@ static Real strToReal(const char *p, char** endptr)
     }
   }
 
-  // Handle exponent, if any.
-  if((*p == 'e') || (*p == 'E')) {
+  // Handle exponent, if any - 'e' must be followed by digits (w/ optional sign), otherwise, like strtod, we
+  //  stop before it so that, e.g., "1em" is parsed as 1 with units "em"
+  // (reading p[1], p[2] is safe since string is null terminated and p[1] is only a sign if not '\0')
+  if((*p == 'e' || *p == 'E') && (isDigit(p[1]) || ((p[1] == '-' || p[1] == '+') && isDigit(p[2])))) {
     int frac = 0;
     Real scale = 1.0;
     unsigned int expon;
@@ -297,13 +300,20 @@ int intToStr(char* str, Int x)
   return ii;
 }
 
+// max chars written by realToStr() for prec < 10 (realToStr doesn't write '\0'): 21 for |f| < INT_MAX
+//  (sign + 10 digits + '.' + 9 digits), 24 for "%.17g" (e.g. "-1.7976931348623157e+308")
+#define REAL_TO_STR_MAX_LEN 24
+
 template<typename Real>
 int realToStr(char* str, Real f, int prec)
 {
   static const Real powers_of_10[] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000};
 
   // we could of course extend range and precision we handle by using 64-bit ints
-  if(!(f < INT_MAX && f > -INT_MAX && prec < 10))  // handles NaN, since all comparisons with NaN return false
+  // %.17g (enough to round trip double) keeps output length bounded for huge values, unlike %f
+  if(!(f < INT_MAX && f > -INT_MAX))  // handles NaN, since all comparisons with NaN return false
+    return stbsp_sprintf(str, "%.17g", double(f));
+  if(prec >= 10)
     return stbsp_sprintf(str, "%.*f", prec, f);  // let the professionals handle this one
 
   bool negative = f < 0;
@@ -591,16 +601,20 @@ std::string base64_encode(const unsigned char* data, size_t len)
 
 std::vector<unsigned char> base64_decode(const char* data, size_t len)
 {
-  static std::vector<int> base64dec(256, -1);
-  if(base64dec['A'] == -1) { for (int ii = 0; ii < 64; ++ii) base64dec[base64enc[ii]] = ii; }
+  // thread-safe one-time init (function-local static)
+  static const std::array<signed char, 256> base64dec = []{
+    std::array<signed char, 256> t;
+    t.fill(-1);
+    for (int ii = 0; ii < 64; ++ii) t[(unsigned char)base64enc[ii]] = ii;
+    return t;
+  }();
 
   std::vector<unsigned char> strout(((len + 2)/4)*3, '\0');
-  unsigned char* out = &strout[0];
+  unsigned char* out = strout.data();  // not &strout[0], which is UB if len == 0
   unsigned int val = 0;
   int valb = -8;
   for (size_t ii = 0; ii < len; ++ii) {
-    char c = data[ii];
-    int d = base64dec[c];
+    int d = base64dec[(unsigned char)data[ii]];  // char may be signed
     if (d == -1) continue;  // skip invalid chars
     val = (val << 6) + (unsigned int)d;
     valb += 6;
@@ -610,7 +624,7 @@ std::vector<unsigned char> base64_decode(const char* data, size_t len)
     }
   }
   //ASSERT(out - &strout[0] <= strout.size());
-  strout.resize(out - &strout[0]);
+  strout.resize(out - strout.data());
   return strout;
 }
 
@@ -674,28 +688,40 @@ std::string randomData(size_t len)
   return s;
 }
 
+// base64_decode returns vector<unsigned char>; convert for comparisons
+std::string b64dec(const std::string& s)
+{
+  auto v = base64_decode(s);
+  return std::string(v.begin(), v.end());
+}
+
 int main(int argc, char* argv[])
 {
   srandpp(89);
 
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhcw==") == "any simple pleas");
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhc3U=") == "any simple pleasu");
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhc3Vy") == "any simple pleasur");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhcw==") == "any simple pleas");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhc3U=") == "any simple pleasu");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhc3Vy") == "any simple pleasur");
 
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhcw") == "any simple pleas");
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhc3U") == "any simple pleasu");
-  ASSERT(base64_decode("YW55IHNpbXBsZSBwbGVhc3Vy") == "any simple pleasur");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhcw") == "any simple pleas");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhc3U") == "any simple pleasu");
+  ASSERT(b64dec("YW55IHNpbXBsZSBwbGVhc3Vy") == "any simple pleasur");
+
+  ASSERT(b64dec("").empty());
+  ASSERT(base64_decode(NULL, 0).empty());
+  // chars >= 0x80 (negative if char is signed) are skipped like any other invalid char
+  ASSERT(b64dec("aGVs\xc3\xa9" "bG8\xff=") == "hello");
 
   for(int n = 10; n < 1000; ++n) {
     std::string s = randomData(n);
     std::string senc = base64_encode(s);
-    ASSERT(base64_decode(senc) == s);
+    ASSERT(b64dec(senc) == s);
     senc.insert(randpp()%n, randpp()%6, ' ');
     senc.insert(senc.size() - randpp()%6, randpp()%6, ' ');
     senc.insert(randpp()%6, randpp()%6, ' ');
     //PLATFORM_LOG(senc.c_str());
     //PLATFORM_LOG("<end>\n\n");
-    ASSERT(base64_decode(senc) == s);
+    ASSERT(b64dec(senc) == s);
   }
   return 0;
 }
