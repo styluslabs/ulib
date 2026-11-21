@@ -37,6 +37,9 @@ struct IOStream
   virtual bool seek(long offset, int origin = SEEK_SET) = 0;  // set stream position
   virtual bool flush() { return true; }
   virtual bool truncate(size_t len) = 0;  // returns true on success
+  // false if any operation (e.g. a write) has failed since stream was opened or clearError() was called
+  virtual bool good() const { return true; }
+  virtual void clearError() {}
   virtual const char* name() const { return ""; }
   virtual size_t size() const = 0;
   virtual size_t readp(void** pdest, size_t len) = 0;  // read into buffer owned by stream
@@ -108,7 +111,10 @@ struct FileStream : public IOStream
   long tell() const override { return ftell(file); }
   bool seek(long offset, int origin = SEEK_SET) override { return fseek(file, offset, origin) == 0; }
   bool flush() override { return fflush(file) == 0; }
+  // truncate(0) reopens file by name (in wb+ mode); otherwise, the open file is truncated
   bool truncate(size_t len) override;
+  bool good() const override { return file && !ferror(file); }
+  void clearError() override { if(file) clearerr(file); }
   const char* name() const override { return filename.c_str(); }
   size_t size() const override;
   size_t readp(void** pdest, size_t len) override;
@@ -169,7 +175,23 @@ private:
   void normalize();
 };
 
+// file identity and modification state, for detecting changes by other processes (e.g. replacement of file
+//  by sync clients, which often preserve modification time); dev and ino are 0 on Windows
+struct FileStat
+{
+  uint64_t dev = 0, ino = 0;
+  int64_t size = -1;  // -1 if file doesn't exist (or stat failed)
+  int64_t mtimeNs = 0;  // modification time in ns since epoch (resolution depends on file system)
+
+  bool isValid() const { return size >= 0; }
+  bool sameFile(const FileStat& b) const { return dev == b.dev && ino == b.ino; }
+  bool operator==(const FileStat& b) const { return sameFile(b) && size == b.size && mtimeNs == b.mtimeNs; }
+  bool operator!=(const FileStat& b) const { return !operator==(b); }
+};
+
 // TODO: use string_views (C++17) instead of string for these
+FileStat getFileStat(const FSPath& filename);
+FileStat getFileStat(FILE* file);  // for open file
 Timestamp getFileMTime(const FSPath& filename);
 long getFileSize(const FSPath& filename);
 std::vector<std::string> lsDirectory(const FSPath& name);
@@ -221,6 +243,11 @@ std::string readFile(const char* filename);
 #include <fstream>
 #include <sys/types.h>
 #include <sys/stat.h>
+#if PLATFORM_WIN
+#include <io.h>  // for _chsize_s
+#else
+#include <unistd.h>  // for ftruncate
+#endif
 
 MemStream& MemStream::operator=(MemStream&& other)
 {
@@ -256,7 +283,14 @@ bool FileStream::truncate(size_t len)
   // reopen(NULL, ...) doesn't work on Windows, so just close and open
   if(len == 0)
     return close() && open("wb+");   //freopen(NULL, "wb+", file) != NULL;
-  return close() && truncateFile(filename.c_str(), len) && open();
+  // truncating by name would truncate a different file if ours has been replaced (e.g. by a sync client)
+  if(!file || fflush(file) != 0)
+    return false;
+#if PLATFORM_WIN
+  return _chsize_s(_fileno(file), len) == 0;
+#else
+  return ftruncate(fileno(file), len) == 0;
+#endif
 }
 
 size_t FileStream::size() const
@@ -332,6 +366,36 @@ bool FSPath::exists(const char* mode) const
   if(f != NULL)
     fclose(f);
   return f != NULL;
+}
+
+static FileStat statToFileStat(const struct stat& st)
+{
+  FileStat fs;
+  fs.size = st.st_size;
+#if PLATFORM_WIN
+  fs.mtimeNs = int64_t(st.st_mtime)*1000000000;  // st_dev, st_ino not meaningful
+#else
+  fs.dev = st.st_dev;
+  fs.ino = st.st_ino;
+#if PLATFORM_OSX || PLATFORM_IOS
+  fs.mtimeNs = int64_t(st.st_mtimespec.tv_sec)*1000000000 + st.st_mtimespec.tv_nsec;
+#else
+  fs.mtimeNs = int64_t(st.st_mtim.tv_sec)*1000000000 + st.st_mtim.tv_nsec;
+#endif
+#endif
+  return fs;
+}
+
+FileStat getFileStat(const FSPath& filename)
+{
+  struct stat st;
+  return stat(filename.c_str(), &st) == 0 ? statToFileStat(st) : FileStat();
+}
+
+FileStat getFileStat(FILE* file)
+{
+  struct stat st;
+  return file && fstat(fileno(file), &st) == 0 ? statToFileStat(st) : FileStat();
 }
 
 Timestamp getFileMTime(const FSPath& filename)
